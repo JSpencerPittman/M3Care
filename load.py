@@ -47,15 +47,15 @@ def load_diagnoses(splitter):
     with open("odir_prep/right_diag.pkl", "rb") as f:
         right_diag = pickle.load(f)
 
-    left_diag = np.array(left_diag)
-    right_diag = np.array(right_diag)
+    left_diag = np.array(left_diag, dtype="object")
+    right_diag = np.array(right_diag, dtype="object")
 
     return {
         "left": splitter.split(left_diag),
         "right": splitter.split(right_diag)
     }
 
-def load_diagnoses_mask(splitter):
+def load_diagnosis_masks(splitter):
     with open("odir_prep/left_diag_mask.pkl", "rb") as f:
         left_diag_mask = pickle.load(f)
     with open("odir_prep/right_diag_mask.pkl", "rb") as f:
@@ -70,7 +70,10 @@ def load_diagnoses_mask(splitter):
     }
 
 def load_images(splitter):
-    results = dict()
+    results = {
+        "left": dict(),
+        "right": dict()
+    }
 
     for section in ["train", "val", "test"]:
         left_fundus_images = list()
@@ -81,9 +84,7 @@ def load_images(splitter):
             left_fundus_images.append(fundus_images[0])
             right_fundus_images.append(fundus_images[1])
 
-        results[section] = {
-            "left": left_fundus_images,
-            "right": right_fundus_images
-        }
+        results["left"][section] = left_fundus_images
+        results["right"][section] = right_fundus_images
     
     return results

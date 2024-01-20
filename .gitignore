@@ -3,3 +3,7 @@ env/
 
 # Data
 odir_prep/
+
+# Jupyter
+.ipynb_checkpoints/
+__pycache__/
