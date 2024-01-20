@@ -1,0 +1,5 @@
+# Venv
+env/
+
+# Data
+odir_prep/
