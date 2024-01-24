@@ -51,6 +51,8 @@ class Encoder(nn.Module):
         
     def forward(self, x, mask):
         "Pass the input (and mask) through each layer in turn."
-        for layer in self.layers:
+        for i, layer in enumerate(self.layers):
+            print(f"Layer {i}: {layer}")
             x = layer(x, mask)
+            print(f"XOUT: {x.shape}")
         return self.norm(x)

@@ -1,49 +1,71 @@
+import torch
 import torch.nn as nn
-
-# Do not change these imports; your module names should be
-#   `CNN` in the file `cnn.py`
-#   `Highway` in the file `highway.py`
-# Uncomment the following two imports once you're ready to run part 1(j)
-
-from m3care.cs224n.cnn import CNN
+import torch.nn.functional as F
 from m3care.cs224n.highway import Highway
 
 class ModelEmbeddings(nn.Module):
-    """
-    Class that converts input words to their CNN-based embeddings.
-    """
-    def __init__(self, embed_size, vocab):
-        """
-        Init the Embedding layer for one language
-        @param embed_size (int): Embedding size (dimensionality) for the output
-        @param vocab (VocabEntry): VocabEntry object. See vocab.py for documentation.
-        """
+    def __init__(self, vocab, embedding_dim, out_channels, kernel_size, dropout_rate):
         super(ModelEmbeddings, self).__init__()
-
-        char_embed_size = 50
-        self.embed_size = embed_size
+        
         self.vocab = vocab
-        self.embeddings = nn.Embedding(len(vocab.char2id), char_embed_size)
-        self.dropout = nn.Dropout(p=0.3)
-        self.cnn = CNN(char_embed_size, embed_size)
-        self.highway = Highway(embed_size)
+        self.vocab_size = len(vocab)
+        self.max_word_length = max([len(w) for w in vocab.id2word.values()])
+        self.embedding_dim = embedding_dim
+        self.out_channels = out_channels
+        self.dropout_rate = dropout_rate
+        self.char_vocab_dim = 127
 
+        self.embedding = nn.Embedding(self.char_vocab_dim, self.embedding_dim, padding_idx=1)
+        self.dropout = nn.Dropout(self.dropout_rate)
+        self.char_conv = nn.Conv2d(in_channels=1, out_channels=out_channels, kernel_size=(embedding_dim, kernel_size))
+        # self.conv = nn.Conv1d(in_channels=embedding_dim,
+        #                     out_channels=out_channels,
+        #                     kernel_size=kernel_size)
+        self.relu = nn.ReLU()
 
-    def forward(self, input):
-        """
-        Looks up character-based CNN embeddings for the words in a batch of sentences.
-        @param input: Tensor of integers of shape (sentence_length, batch_size, max_word_length) where
-            each integer is an index into the character vocabulary
+    def expand_sentence(self, sent):
+        sent = self.vocab.indices2words(sent.tolist())
+        sent = [[ord(c) for c in s] for s in sent]
+        sent = [(w + [0] * (self.max_word_length - len(w))) for w in sent]
+        return sent
 
-        @param output: Tensor of shape (sentence_length, batch_size, embed_size), containing the
-            CNN-based embeddings for each word of the sentences in the batch
-        """
+    def forward(self, x):
+        # b: batch size
+        # s: max words in a sentence
+        # c: max characters in a word
+        # o: output dimension
+        # e: embed dimension
 
-        data = self.embeddings(input) # (batch_size, sentence_length, max_word_length, char_embed_size)
-        data_shape = data.shape
-        data = data.reshape(data_shape[0] * data_shape[1], data_shape[2], data_shape[3]) # (batch_size * sentence_length, max_word_length, char_embed_size)
-        x_word_embed = self.cnn(data.transpose(1, 2)) # x_word_embed is (batch_size * sentence_length, embed_size)
-        x_word_embed = self.highway(x_word_embed)
-        x_word_embed = self.dropout(x_word_embed)
-        x_word_embed = x_word_embed.reshape(data_shape[0], data_shape[1], self.embed_size)
-        return x_word_embed
+        batch_size = x.shape[0]
+
+        # x : (b x s)
+
+        # (b x s x c)
+        x = torch.tensor([self.expand_sentence(s)
+                                    for s in x])
+
+        # (b x s x c x e)
+        x = self.dropout(self.embedding(x))
+
+        # (b x s x e x c)
+        x = x.permute(0, 1, 3, 2)
+
+        # (b*s x e x c)
+        x = x.view(-1, self.embedding_dim, self.max_word_length)
+
+        # (b*s x 1 x e x c)
+        x = x.unsqueeze(1)
+        
+        # (b*s x o x 1 x W_out)
+        x = self.relu(self.char_conv(x))
+
+        # (b*s x o x W_out)
+        x = x.squeeze()
+
+        # (b*s x o)
+        x = F.max_pool1d(x, x.shape[2]).squeeze()
+
+        # (b x s x o)
+        x = x.view(batch_size, -1, x.shape[-1])
+        
+        return x

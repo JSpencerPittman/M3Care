@@ -88,9 +88,11 @@ class M3Care(nn.Module):
         self.weight2 = clones(nn.Linear(self.hidden_dim, 1), self.modal_num)
 
     def forward(self, input, left_fundus, right_fundus, left_diag, right_diag, l_r_masks):
+        # Tabular Data
         values_hidden = self.relu(self.linear1(input))# b 1
         val_mask = length_to_mask(torch.ones((values_hidden.shape[0],1)).int().squeeze()).unsqueeze(1).to(self.device).int()
     
+        # Textual Data
         left_diag_contexts, left_diag_lens = self.NLP_model(left_diag)# b t h
         
         left_diag_contexts = self.relu(left_diag_contexts)
@@ -100,12 +102,14 @@ class M3Care(nn.Module):
         right_diag_contexts = self.relu(right_diag_contexts)
         right_diag_mask = length_to_mask(torch.from_numpy(np.array(right_diag_lens))).unsqueeze(1).to(self.device)
         
+        # Image Data
         left_f = self.relu(self.res2hidden1(self.resnet18(left_fundus)))
         left_f_mask = length_to_mask(torch.ones((values_hidden.shape[0],1)).int().squeeze()).unsqueeze(1).to(self.device).int()
         
         right_f = self.relu(self.res2hidden1(self.resnet18(right_fundus)))
         right_f_mask = length_to_mask(torch.ones((values_hidden.shape[0],1)).int().squeeze()).unsqueeze(1).to(self.device).int()
         
+        # 
         values_hidden00 = values_hidden
         left_diag_hidden00 = torch.zeros_like(left_diag_contexts[:, 0 ])
         right_diag_hidden00 = torch.zeros_like(left_diag_contexts[:, 0 ])

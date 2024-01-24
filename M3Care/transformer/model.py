@@ -19,7 +19,8 @@ class NMTTransformer(nn.Module):
         @param dropout_rate (float): Dropout probability, for attention
         """
         super(NMTTransformer, self).__init__()
-        self.model_embeddings = ModelEmbeddings(hidden_size, vocab)
+        self.model_embeddings = ModelEmbeddings(vocab, 50, hidden_size, 5, 0.3)
+        # self.model_embeddings = ModelEmbeddings(hidden_size, vocab)
         self.hidden_size = hidden_size
         self.dropout_rate = dropout_rate
         self.vocab = vocab
@@ -48,10 +49,11 @@ class NMTTransformer(nn.Module):
         # Convert list of lists into tensors
         total_src_padded = self.vocab.to_input_tensor(
             source, device=self.devicename)   # Tensor: (src_len, b)
-    
+
         enc_hiddens, first_hidden = self.encode(
             total_src_padded)
         
+        print("TRANSFORMEROUTPUT: {enc_hiddens.shape}")
         return enc_hiddens, source_lengths
 
 
@@ -71,19 +73,19 @@ class NMTTransformer(nn.Module):
         """
         enc_hiddens, dec_init_state = None, None
 
+        print("ENCODE#1: ", source_padded.shape)
         source_padded = source_padded.permute(1,0) # b t 
-        src_mask = (source_padded != 0).unsqueeze(-2)
+        src_mask = (source_padded != 0).unsqueeze(-2) 
 
         X = self.model_embeddings(source_padded)
-
+        print("ENCODE#2: ", X.shape)
+        print("ENCODE#3: ", src_mask.shape)
         
         enc_hiddens = self.encoder(X, src_mask) # b t h
         first_hidden = enc_hiddens[:,0,:]
-
+        print("ENCODE#4: ", enc_hiddens.shape)
        
         return enc_hiddens, first_hidden
-
-
 
     @property
     def device(self) -> torch.device:
