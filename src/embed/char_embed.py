@@ -1,12 +1,12 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from m3care.cs224n.highway import Highway
+import torch.functional as F
 
-class ModelEmbeddings(nn.Module):
+
+class CharacterEmbedding(nn.Module):
     def __init__(self, vocab, embedding_dim, out_channels, kernel_size, dropout_rate):
-        super(ModelEmbeddings, self).__init__()
-        
+        super(CharacterEmbedding, self).__init__()
+
         self.vocab = vocab
         self.vocab_size = len(vocab)
         self.max_word_length = max([len(w) for w in vocab.id2word.values()])
@@ -15,12 +15,11 @@ class ModelEmbeddings(nn.Module):
         self.dropout_rate = dropout_rate
         self.char_vocab_dim = 127
 
-        self.embedding = nn.Embedding(self.char_vocab_dim, self.embedding_dim, padding_idx=1)
+        self.embedding = nn.Embedding(
+            self.char_vocab_dim, self.embedding_dim, padding_idx=1)
         self.dropout = nn.Dropout(self.dropout_rate)
-        self.char_conv = nn.Conv2d(in_channels=1, out_channels=out_channels, kernel_size=(embedding_dim, kernel_size))
-        # self.conv = nn.Conv1d(in_channels=embedding_dim,
-        #                     out_channels=out_channels,
-        #                     kernel_size=kernel_size)
+        self.char_conv = nn.Conv2d(
+            in_channels=1, out_channels=out_channels, kernel_size=(embedding_dim, kernel_size))
         self.relu = nn.ReLU()
 
     def expand_sentence(self, sent):
@@ -42,7 +41,7 @@ class ModelEmbeddings(nn.Module):
 
         # (b x s x c)
         x = torch.tensor([self.expand_sentence(s)
-                                    for s in x])
+                          for s in x])
 
         # (b x s x c x e)
         x = self.dropout(self.embedding(x))
@@ -55,7 +54,7 @@ class ModelEmbeddings(nn.Module):
 
         # (b*s x 1 x e x c)
         x = x.unsqueeze(1)
-        
+
         # (b*s x o x 1 x W_out)
         x = self.relu(self.char_conv(x))
 
@@ -67,5 +66,5 @@ class ModelEmbeddings(nn.Module):
 
         # (b x s x o)
         x = x.view(batch_size, -1, x.shape[-1])
-        
+
         return x

@@ -1,12 +1,11 @@
-import torch.nn.functional as F
 import torch.nn as nn
+import torch.functional as F
 import torch
-
-from m3care.utils import clones
 
 
 class PositionwiseFeedForward(nn.Module):
     "Implements FFN equation."
+
     def __init__(self, d_model, d_ff, dropout=0.1):
         super(PositionwiseFeedForward, self).__init__()
         self.w_1 = nn.Linear(d_model, d_ff)
@@ -18,7 +17,8 @@ class PositionwiseFeedForward(nn.Module):
 
 
 class LayerNorm(nn.Module):
-    "Construct a layernorm module (See citation for details)."
+    "Construct a layernorm module."
+
     def __init__(self, features, eps=1e-6):
         super(LayerNorm, self).__init__()
         self.a_2 = nn.Parameter(torch.ones(features))
@@ -29,12 +29,14 @@ class LayerNorm(nn.Module):
         mean = x.mean(-1, keepdim=True)
         std = x.std(-1, keepdim=True)
         return self.a_2 * (x - mean) / (std + self.eps) + self.b_2
-    
+
+
 class SublayerConnection(nn.Module):
     """
     A residual connection followed by a layer norm.
     Note for code simplicity the norm is first as opposed to last.
     """
+
     def __init__(self, size, dropout):
         super(SublayerConnection, self).__init__()
         self.norm = LayerNorm(size)
@@ -43,4 +45,3 @@ class SublayerConnection(nn.Module):
     def forward(self, x, sublayer):
         "Apply residual connection to any sublayer with the same size."
         return x + self.dropout(sublayer(self.norm(x)))
-    
