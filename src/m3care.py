@@ -85,46 +85,55 @@ class M3Care(nn.Module):
         self.weight1 = clones(nn.Linear(self.hidden_dim, 1), self.modal_num)
         self.weight2 = clones(nn.Linear(self.hidden_dim, 1), self.modal_num)
 
-    def forward(self, input, left_fundus, right_fundus, left_diag, right_diag, l_r_masks):
-        # Tabular Data
-        values_hidden = self.relu(self.linear1(input))  # b 1
-        val_mask = length_to_mask(torch.ones((values_hidden.shape[0], 1)).int(
+    def forward(self, tabular, left_fundus, right_fundus, left_diag, right_diag, l_r_masks):
+        ### ----- Unimodal Feature Extraction ----- ###
+
+        # Tabular Modality
+        tabular_hidden = self.relu(self.linear1(tabular))  # b 1
+        tabular_mask = length_to_mask(torch.ones((tabular_hidden.shape[0], 1)).int(
         ).squeeze()).unsqueeze(1).to(self.device).int()
 
-        # Textual Data
+        # Natural Language Modality
         left_diag_contexts, left_diag_lens = self.NLP_model(left_diag)  # b t h
-
-        left_diag_contexts = self.relu(left_diag_contexts)
-        left_diag_mask = length_to_mask(torch.from_numpy(
-            np.array(left_diag_lens))).unsqueeze(1).to(self.device)
-
         right_diag_contexts, right_diag_lens = self.NLP_model(
             right_diag)  # b t h
+
+        left_diag_contexts = self.relu(left_diag_contexts)
         right_diag_contexts = self.relu(right_diag_contexts)
+
+        left_diag_mask = length_to_mask(torch.from_numpy(
+            np.array(left_diag_lens))).unsqueeze(1).to(self.device)
         right_diag_mask = length_to_mask(torch.from_numpy(
             np.array(right_diag_lens))).unsqueeze(1).to(self.device)
 
-        # Image Data
-        left_f = self.relu(self.res2hidden1(self.resnet18(left_fundus)))
-        left_f_mask = length_to_mask(torch.ones((values_hidden.shape[0], 1)).int(
-        ).squeeze()).unsqueeze(1).to(self.device).int()
+        # Image Modality
+        left_image = self.relu(self.res2hidden1(self.resnet18(left_fundus)))
+        right_image = self.relu(self.res2hidden1(self.resnet18(right_fundus)))
 
-        right_f = self.relu(self.res2hidden1(self.resnet18(right_fundus)))
-        right_f_mask = length_to_mask(torch.ones(
-            (values_hidden.shape[0], 1)).int().squeeze()).unsqueeze(1).to(self.device).int()
+        left_image_mask = length_to_mask(
+            torch.ones((tabular_hidden.shape[0], 1)).int().squeeze()).unsqueeze(1).to(self.device).int()
+        right_image_mask = length_to_mask(torch.ones(
+            (tabular_hidden.shape[0], 1)).int().squeeze()).unsqueeze(1).to(self.device).int()
 
-        #
-        values_hidden00 = values_hidden
+        ### ----- Assimilate Unimodal Representations ----- ###
+        # Tabular modality
+        tabular_hidden00 = tabular_hidden
+
+        # Textual modality
         left_diag_hidden00 = torch.zeros_like(left_diag_contexts[:, 0])
         right_diag_hidden00 = torch.zeros_like(left_diag_contexts[:, 0])
-        left_f_hidden00 = torch.zeros_like(left_diag_contexts[:, 0])
-        right_f_hidden00 = torch.zeros_like(left_diag_contexts[:, 0])
-        for j in range(values_hidden00.shape[0]):
+        for j in range(tabular_hidden00.shape[0]):
             left_diag_hidden00[j] = left_diag_contexts[j, 0]
             right_diag_hidden00[j] = right_diag_contexts[j, 0]
-            left_f_hidden00[j] = left_f[j]
-            right_f_hidden00[j] = right_f[j]
 
+        # Image modality
+        left_image_hidden00 = torch.zeros_like(left_diag_contexts[:, 0])
+        right_image_hidden00 = torch.zeros_like(left_diag_contexts[:, 0])
+        for j in range(tabular_hidden00.shape[0]):
+            left_image_hidden00[j] = left_image[j]
+            right_image_hidden00[j] = right_image[j]
+
+        # Missing Modality matrix
         left_diag_mask_ = torch.from_numpy(np.array(l_r_masks[0])).to(
             self.device).unsqueeze(1)  # b 1
         right_diag_mask_ = torch.from_numpy(
@@ -133,59 +142,69 @@ class M3Care(nn.Module):
         left_diag_mask2 = left_diag_mask_ * left_diag_mask_.permute(1, 0)
         right_diag_mask2 = right_diag_mask_ * right_diag_mask_.permute(1, 0)
 
-        values_hidden_mat = guassian_kernel(self.bn(
-            self.relu(self.simiProj[0](values_hidden00))), kernel_mul=2.0, kernel_num=3)
-        values_hidden_mat2 = guassian_kernel(
-            self.bn(values_hidden00), kernel_mul=2.0, kernel_num=3)
-        values_hidden_mat = ((1-self.sigmoid(self.eps0)) *
-                             values_hidden_mat+self.sigmoid(self.eps0))*values_hidden_mat2
+        ### ----- Calculate Similarity between Modalities ----- ###
+        # Tabular modality
+        tabular_hidden_mat = guassian_kernel(self.bn(
+            self.relu(self.simiProj[0](tabular_hidden00))), kernel_mul=2.0, kernel_num=3)
+        tabular_hidden_mat2 = guassian_kernel(
+            self.bn(tabular_hidden00), kernel_mul=2.0, kernel_num=3)
 
+        tabular_hidden_mat = ((1-self.sigmoid(self.eps0)) *
+                              tabular_hidden_mat+self.sigmoid(self.eps0))*tabular_hidden_mat2
+
+        # Natural Language modality
         left_diag_hidden_mat = guassian_kernel(self.bn(
             self.relu(self.simiProj[1](left_diag_hidden00))), kernel_mul=2.0, kernel_num=3)
-        left_diag_hidden_mat2 = guassian_kernel(
-            self.bn(left_diag_hidden00), kernel_mul=2.0, kernel_num=3)
-        left_diag_hidden_mat = ((1-self.sigmoid(self.eps1)) *
-                                left_diag_hidden_mat+self.sigmoid(self.eps1))*left_diag_hidden_mat2
-        left_diag_hidden_mat = left_diag_hidden_mat*left_diag_mask2
-
         right_diag_hidden_mat = guassian_kernel(self.bn(self.relu(
             self.simiProj[1](right_diag_hidden00))), kernel_mul=2.0, kernel_num=3)
+
         right_diag_hidden_mat2 = guassian_kernel(
             self.bn(right_diag_hidden00), kernel_mul=2.0, kernel_num=3)
+        left_diag_hidden_mat2 = guassian_kernel(
+            self.bn(left_diag_hidden00), kernel_mul=2.0, kernel_num=3)
+
+        left_diag_hidden_mat = ((1-self.sigmoid(self.eps1)) *
+                                left_diag_hidden_mat+self.sigmoid(self.eps1))*left_diag_hidden_mat2
         right_diag_hidden_mat = (
             (1-self.sigmoid(self.eps1))*right_diag_hidden_mat+self.sigmoid(self.eps1))*right_diag_hidden_mat2
+
+        left_diag_hidden_mat = left_diag_hidden_mat*left_diag_mask2
         right_diag_hidden_mat = right_diag_hidden_mat*right_diag_mask2
 
-        left_f_hidden_mat = guassian_kernel(self.bn(
-            self.relu(self.simiProj[2](left_f_hidden00))), kernel_mul=2.0, kernel_num=3)
-        left_f_hidden_mat2 = guassian_kernel(
-            self.bn(left_f_hidden00), kernel_mul=2.0, kernel_num=3)
-        left_f_hidden_mat = ((1-self.sigmoid(self.eps2)) *
-                             left_f_hidden_mat+self.sigmoid(self.eps2))*left_f_hidden_mat2
+        # Image modality
+        left_image_hidden_mat = guassian_kernel(self.bn(
+            self.relu(self.simiProj[2](left_image_hidden00))), kernel_mul=2.0, kernel_num=3)
+        right_image_hidden_mat = guassian_kernel(self.bn(
+            self.relu(self.simiProj[2](right_image_hidden00))), kernel_mul=2.0, kernel_num=3)
 
-        right_f_hidden_mat = guassian_kernel(self.bn(
-            self.relu(self.simiProj[2](right_f_hidden00))), kernel_mul=2.0, kernel_num=3)
-        right_f_hidden_mat2 = guassian_kernel(
-            self.bn(right_f_hidden00), kernel_mul=2.0, kernel_num=3)
-        right_f_hidden_mat = ((1-self.sigmoid(self.eps2)) *
-                              right_f_hidden_mat+self.sigmoid(self.eps2))*right_f_hidden_mat2
+        left_image_hidden_mat2 = guassian_kernel(
+            self.bn(left_image_hidden00), kernel_mul=2.0, kernel_num=3)
+        right_image_hidden_mat2 = guassian_kernel(
+            self.bn(right_image_hidden00), kernel_mul=2.0, kernel_num=3)
 
+        left_image_hidden_mat = ((1-self.sigmoid(self.eps2)) *
+                                 left_image_hidden_mat+self.sigmoid(self.eps2))*left_image_hidden_mat2
+        right_image_hidden_mat = ((1-self.sigmoid(self.eps2)) *
+                                  right_image_hidden_mat+self.sigmoid(self.eps2))*right_image_hidden_mat2
+
+        ### ----- Stabilize learned representations --- ###
         diff1 = torch.abs(torch.norm(self.simiProj[0](
-            values_hidden00)) - torch.norm(values_hidden00))
+            tabular_hidden00)) - torch.norm(tabular_hidden00))
         diff2 = torch.abs(torch.norm(self.simiProj[1](
             left_diag_hidden00)) - torch.norm(left_diag_hidden00))
         diff22 = torch.abs(torch.norm(self.simiProj[1](
             right_diag_hidden00)) - torch.norm(right_diag_hidden00))
-
         diff3 = torch.abs(torch.norm(self.simiProj[2](
-            left_f_hidden00)) - torch.norm(left_f_hidden00))
+            left_image_hidden00)) - torch.norm(left_image_hidden00))
         diff33 = torch.abs(torch.norm(self.simiProj[2](
-            right_f_hidden00)) - torch.norm(right_f_hidden00))
+            right_image_hidden00)) - torch.norm(right_image_hidden00))
 
+        # Calculate L_stab
         sum_of_diff = diff1+diff2+diff22+diff3+diff33
 
-        similar_score = (values_hidden_mat + left_diag_hidden_mat + right_diag_hidden_mat + left_f_hidden_mat +
-                         right_f_hidden_mat) / \
+        ### ----- Filtered Similarity Matrix ----- ###
+        similar_score = (tabular_hidden_mat + left_diag_hidden_mat + right_diag_hidden_mat + left_image_hidden_mat +
+                         right_image_hidden_mat) / \
             (torch.ones_like(right_diag_mask2) + torch.ones_like(right_diag_mask2) + torch.ones_like(right_diag_mask2)
              + right_diag_mask2 + left_diag_mask2)
 
@@ -195,76 +214,86 @@ class M3Care(nn.Module):
         bin_mask = similar_score > 0
         similar_score = similar_score + bin_mask * temp_thresh.detach()
 
+        ### ----- Use similar patients to impute natural language modality ----- ###
+        # Run GCN to aggregate data from similar patients in the graph
         left_diag_hidden0 = self.relu(self.GCN[0](
             similar_score*left_diag_mask2, left_diag_hidden00))
-        left_diag_hidden0 = self.relu(self.GCN_2[0](
-            similar_score*left_diag_mask2, left_diag_hidden0))
-
         right_diag_hidden0 = self.relu(self.GCN[1](
             similar_score*right_diag_mask2, right_diag_hidden00))
+
+        left_diag_hidden0 = self.relu(self.GCN_2[0](
+            similar_score*left_diag_mask2, left_diag_hidden0))
         right_diag_hidden0 = self.relu(self.GCN_2[1](
             similar_score*right_diag_mask2, right_diag_hidden0))
 
+        # Calculate the tradeoff of imputed vs original data
         left_diag_weight1 = torch.sigmoid(self.weight1[0](left_diag_hidden0))
-        left_diag_weight2 = torch.sigmoid(self.weight2[0](left_diag_hidden00))
-        left_diag_weight1 = left_diag_weight1 / \
-            (left_diag_weight1+left_diag_weight2)
-        left_diag_weight2 = 1-left_diag_weight1
-
         right_diag_weight1 = torch.sigmoid(self.weight1[1](right_diag_hidden0))
+
+        left_diag_weight2 = torch.sigmoid(self.weight2[0](left_diag_hidden00))
         right_diag_weight2 = torch.sigmoid(
             self.weight2[1](right_diag_hidden00))
+
+        left_diag_weight1 = left_diag_weight1 / \
+            (left_diag_weight1+left_diag_weight2)
         right_diag_weight1 = right_diag_weight1 / \
             (right_diag_weight1+right_diag_weight2)
+
+        left_diag_weight2 = 1-left_diag_weight1
         right_diag_weight2 = 1-right_diag_weight1
 
+        # Compute hybrid imputation of natural language modality
         final_left_diag = left_diag_weight1*left_diag_hidden0 + \
             left_diag_weight2*left_diag_hidden00
         final_right_diag = right_diag_weight1*right_diag_hidden0 + \
             right_diag_weight2*right_diag_hidden00
 
+        # if missing value only use the imputed otherwise hybrid
+        left_diag_contexts_ = torch.zeros_like(left_diag_contexts)
         right_diag_contexts_ = torch.zeros_like(right_diag_contexts)
-        for i in range(values_hidden00.shape[0]):
+
+        for i in range(tabular_hidden00.shape[0]):
+            left_diag_contexts_[i] = left_diag_contexts[i]
             right_diag_contexts_[i] = right_diag_contexts[i]
+
             if right_diag_mask_[i][0] != 1:
                 right_diag_contexts_[i, 0] = right_diag_hidden0[i]
-
             else:
                 right_diag_contexts_[i, 0] = final_right_diag[i]
 
-        left_diag_contexts_ = torch.zeros_like(left_diag_contexts)
-        for i in range(values_hidden00.shape[0]):
-            left_diag_contexts_[i] = left_diag_contexts[i]
             if left_diag_mask_[i][0] != 1:
                 left_diag_contexts_[i, 0] = left_diag_hidden0[i]
-
             else:
                 left_diag_contexts_[i, 0] = final_left_diag[i]
 
+        ### ----- Context-aware multimodal interaction capture (sequence) ----- ###
+        # Tabular modal
+        values_hidden = values_hidden.unsqueeze(1) +  \
+            self.token_type_embeddings(torch.zeros_like(
+                tabular_mask.permute(0, 2, 1).squeeze(-1)).to(self.device).long())
+
+        # Textual modal
         left_diag_contexts = self.PositionalEncoding(left_diag_contexts_) +  \
             self.token_type_embeddings(torch.ones_like(
                 left_diag_mask.permute(0, 2, 1).squeeze(-1)).to(self.device).long())
-
-        values_hidden = values_hidden.unsqueeze(1) +  \
-            self.token_type_embeddings(torch.zeros_like(
-                val_mask.permute(0, 2, 1).squeeze(-1)).to(self.device).long())
 
         right_diag_contexts = self.PositionalEncoding(right_diag_contexts_) +  \
             self.token_type_embeddings(
                 2*torch.ones_like(right_diag_mask.permute(0, 2, 1).squeeze(-1)).to(self.device).long())
 
-        left_f_contexts = left_f.unsqueeze(1) +  \
+        # Image modal
+        left_image_contexts = left_image.unsqueeze(1) +  \
             self.token_type_embeddings(
-                3 * torch.ones_like(left_f_mask.permute(0, 2, 1).squeeze(-1)).to(self.device).long())
+                3 * torch.ones_like(left_image_mask.permute(0, 2, 1).squeeze(-1)).to(self.device).long())
 
-        right_f_contexts = right_f.unsqueeze(1) +  \
+        right_image_contexts = right_image.unsqueeze(1) +  \
             self.token_type_embeddings(
-                4 * torch.ones_like(right_f_mask.permute(0, 2, 1).squeeze(-1)).to(self.device).long())
+                4 * torch.ones_like(right_image_mask.permute(0, 2, 1).squeeze(-1)).to(self.device).long())
 
-        z0 = torch.cat([values_hidden, left_diag_contexts, right_diag_contexts, left_f_contexts,
-                        right_f_contexts], dim=1)
-        z0_mask = torch.cat([val_mask.int(), left_diag_mask.int(), right_diag_mask.int(), left_f_mask.int(),
-                             right_f_mask.int()], dim=-1).int()
+        z0 = torch.cat([values_hidden, left_diag_contexts, right_diag_contexts, left_image_contexts,
+                        right_image_contexts], dim=1)
+        z0_mask = torch.cat([tabular_mask.int(), left_diag_mask.int(), right_diag_mask.int(), left_image_mask.int(),
+                             right_image_mask.int()], dim=-1).int()
 
         z1 = self.relu(self.MM_model(z0, z0_mask))  # b 1
 
@@ -273,23 +302,24 @@ class M3Care(nn.Module):
         val_hidden = z2[:, 0, :]
         left_diag_hidden = []
         right_diag_hidden = []
-        left_f_hidden = []
-        right_f_hidden = []
+        left_image_hidden = []
+        right_image_hidden = []
+
         for j in range(z2.shape[0]):
             left_diag_hidden.append(z2[j, 1])
             right_diag_hidden.append(z2[j, 1 + left_diag_contexts.shape[1]])
-            left_f_hidden.append(
+            left_image_hidden.append(
                 z2[j, 1 + left_diag_contexts.shape[1] + right_diag_contexts.shape[1]])
-            right_f_hidden.append(z2[j, 1 + left_diag_contexts.shape[1] + right_diag_contexts.shape[1]
-                                     + left_f_contexts.shape[1]])
+            right_image_hidden.append(z2[j, 1 + left_diag_contexts.shape[1] + right_diag_contexts.shape[1]
+                                         + left_image_contexts.shape[1]])
 
         left_diag_hidden = torch.stack(left_diag_hidden)
         right_diag_hidden = torch.stack(right_diag_hidden)
-        left_f_hidden = torch.stack(left_f_hidden)
-        right_f_hidden = torch.stack(right_f_hidden)
+        left_image_hidden = torch.stack(left_image_hidden)
+        right_image_hidden = torch.stack(right_image_hidden)
 
-        combined_hidden = torch.cat((val_hidden, left_diag_hidden, right_diag_hidden, left_f_hidden,
-                                     right_f_hidden), -1)  # b n h
+        combined_hidden = torch.cat((val_hidden, left_diag_hidden, right_diag_hidden, left_image_hidden,
+                                     right_image_hidden), -1)  # b n h
 
         last_hs_proj = self.dropout(F.relu(self.proj1(combined_hidden)))
 
