@@ -2,8 +2,7 @@ from torch.autograd import Variable
 import torch.nn as nn
 
 from src.utils import clones
-from src.component.layer import LayerNorm
-from src.wrapper.layer import SublayerConnection
+from src.component.layer import LayerNorm, SublayerConnection
 
 
 class Encoder(nn.Module):

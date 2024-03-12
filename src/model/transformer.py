@@ -86,7 +86,7 @@ class NatLangTransformer(nn.Module):
 
 class MultiModalTransformer(nn.Module):
     def __init__(self, input_dim, d_model,  MHD_num_head, d_ff, output_dim, keep_prob=0.5):
-        super(MultiModalEncoder, self).__init__()
+        super(MultiModalTransformer, self).__init__()
 
         # hyperparameters
         self.input_dim = input_dim
