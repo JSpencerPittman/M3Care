@@ -3,6 +3,7 @@ env/
 
 # Data
 odir_prep/
+datasets/*/data
 
 # Jupyter
 .ipynb_checkpoints/
