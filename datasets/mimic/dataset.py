@@ -1,33 +1,20 @@
 from torch.utils.data import Dataset
-from enum import Enum
 import pandas as pd
 import numpy as np
 import os
 
 
-class DatasetType(Enum):
-    TRAIN = 1
-    VAL = 2
-    TEST = 3
-
-
 class MIMICDataset(Dataset):
-    def __init__(self, processed_dir: str, dataset_type: DatasetType):
+    def __init__(self, processed_dir: str, train: bool):
         self.processed_dir = processed_dir
-        self.dataset_type = dataset_type
 
-        if dataset_type == DatasetType.TRAIN:
+        if train:
             self.data_path = os.path.join(self.processed_dir, 'train/')
             self.index_path = os.path.join(
                 self.processed_dir, 'train_idxs.npy')
-        elif dataset_type == DatasetType.VAL:
-            self.data_path = os.path.join(self.processed_dir, 'val/')
-            self.index_path = os.path.join(self.processed_dir, 'val_idxs.npy')
-        elif dataset_type == DatasetType.TEST:
+        else:
             self.data_path = os.path.join(self.processed_dir, 'test/')
             self.index_path = os.path.join(self.processed_dir, 'test_idxs.npy')
-        else:
-            raise ValueError("Invalid dataset type.")
 
         try:
             self.idxs = np.load(self.index_path)
@@ -50,22 +37,21 @@ class MIMICDataset(Dataset):
         self.notes_static.set_index('pat_id', inplace=True)
         self.notes_ts.set_index(['pat_id', 'hours_in'], inplace=True)
 
-        self.nst_idxs = set(self.notes_static.index.values)
-        self.nts_idxs = set(self.notes_ts.index.get_level_values(0).values)
+        self.nst_ids = set(self.notes_static.index.values)
+        self.nts_ids = set(self.notes_ts.index.get_level_values(0).values)
 
     def __len__(self):
-        return self.demographics.shape[0]
+        return len(self.idxs)
 
     def __getitem__(self, idx):
-        demographic = self.demographics.loc[idx]
-        if idx not in self.idxs:
-            raise KeyError("invalid key for the dataset.")
+        pat_id = self.idxs[idx]
+        demographic = self.demographics.loc[pat_id]
 
-        dem = self.demographics.loc[idx]
-        vit = self.vitals.loc[idx]
-        itv = self.interventions.loc[idx]
+        dem = self.demographics.loc[pat_id]
+        vit = self.vitals.loc[pat_id]
+        itv = self.interventions.loc[pat_id]
 
-        nst = self.notes_static.loc[idx] if idx in self.nst_idxs else None
-        nts = self.notes_ts.loc[idx] if idx in self.nts_idxs else None
+        nst = self.notes_static.loc[pat_id] if pat_id in self.nst_ids else None
+        nts = self.notes_ts.loc[pat_id] if pat_id in self.nts_ids else None
 
         return dem, vit, itv, nst, nts
