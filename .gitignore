@@ -8,3 +8,6 @@ datasets/*/data
 # Jupyter
 .ipynb_checkpoints/
 __pycache__/
+
+# Trained models
+runs/
