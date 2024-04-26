@@ -245,7 +245,7 @@ class M3Care(nn.Module):
         nst_self_info = F.sigmoid(self.adapt_self[MODAL_MISS_NST](nst_emb))
         nst_other_info = F.sigmoid(self.adapt_self[MODAL_MISS_NST](nst_aux))
 
-        nst_self_info = nst_self_info / (nst_other_info + nst_other_info)
+        nst_self_info = nst_self_info / (nst_self_info + nst_other_info)
         nst_other_info = 1 - nst_self_info
 
         nst_impute = nst_miss_mat * \
@@ -256,7 +256,7 @@ class M3Care(nn.Module):
         nts_self_info = F.sigmoid(self.adapt_self[MODAL_MISS_NTS](nts_emb))
         nts_other_info = F.sigmoid(self.adapt_self[MODAL_MISS_NTS](nts_aux))
 
-        nts_self_info = nts_self_info / (nts_other_info + nts_other_info)
+        nts_self_info = nts_self_info / (nts_self_info + nts_other_info)
         nts_other_info = 1 - nts_self_info
 
         nts_impute = nts_miss_mat * \
