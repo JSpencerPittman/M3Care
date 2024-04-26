@@ -273,7 +273,7 @@ class M3Care(nn.Module):
                 tabular_mask.permute(0, 2, 1).squeeze(-1)).to(self.device).long())
 
         # Textual modal
-        left_diag_contexts = self.PositionalEncoding(left_diag_contexts_) +  \
+        left_diag_contexts = self.  (left_diag_contexts_) +  \
             self.token_type_embeddings(torch.ones_like(
                 left_diag_mask.permute(0, 2, 1).squeeze(-1)).to(self.device).long())
 

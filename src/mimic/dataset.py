@@ -46,7 +46,6 @@ class MIMICDataset(Dataset):
         pat_id = self.indexes[item_idx]
 
         dem = self.demographics.loc[pat_id]
-        dem = np.array(dem.values).astype(np.float64)
 
         vit = self.vitals.loc[pat_id]
         vit = self._format_ts_batch(vit)
@@ -67,7 +66,7 @@ class MIMICDataset(Dataset):
 
         if pat_id in self.nst_ids:
             with h5py.File(self.notes_static_path, 'r') as f:
-                nst = f[f'row_{pat_id}'][:]
+                nst = f[f'row_{pat_id}']
                 missing[0] = False
 
         if pat_id in self.nts_ids:
@@ -87,7 +86,7 @@ class MIMICDataset(Dataset):
         with h5py.File(self.notes_static_path, 'r') as f:
             for pat_id in pat_ids:
                 if pat_id in match_ids:
-                    nst.append(f[f'row_{pat_id}'][:])
+                    nst.append(f[f'row_{pat_id}'])
                     missing_st.append(False)
                 else:
                     missing_st.append(True)
@@ -98,13 +97,12 @@ class MIMICDataset(Dataset):
         with h5py.File(self.notes_ts_path, 'r') as f:
             for pat_id in pat_ids:
                 if pat_id in match_ids:
-                    nts.append(self._format_notes_ts_group(
+                    nst.append(self._format_notes_ts_group(
                         f[f'pat_id_{pat_id}']))
                     missing_ts.append(False)
                 else:
                     missing_ts.append(True)
 
-        nst = self._format_notes_static(nst)
         missing = np.array(list(zip(missing_st, missing_ts)))
 
         return nst, nts, missing
@@ -124,11 +122,6 @@ class MIMICDataset(Dataset):
             batch_ts[i] = np.vstack([seq, null_rows])
 
         return np.array(batch_ts)
-
-    @staticmethod
-    def _format_notes_static(nst):
-        max_len = max([len(note) for note in nst])
-        return np.array([np.pad(note, (0, max_len-len(note))) for note in nst])
 
     @staticmethod
     def _format_notes_ts_group(nts_group):
