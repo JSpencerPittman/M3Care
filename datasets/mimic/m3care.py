@@ -34,6 +34,9 @@ class M3Care(nn.Module):
                  keep_prob=1):
         super(M3Care, self).__init__()
 
+        # General utilities
+        self.relu = nn.ReLU()
+
         # Store models for each modality
         self.dem_mdl = dem_mdl
         self.vit_mdl = vit_mdl
@@ -44,9 +47,9 @@ class M3Care(nn.Module):
         # Modality similarity calculation
         self.simi_proj = clones(nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim, bias=True),
-            F.relu,
+            self.relu,
             nn.Linear(hidden_dim, hidden_dim, bias=True),
-            F.relu,
+            self.relu,
             nn.Linear(hidden_dim, hidden_dim, bias=True),
         ), MODAL_NUM)
         self.simi_bn = nn.BatchNorm1d(hidden_dim)
@@ -55,18 +58,18 @@ class M3Care(nn.Module):
         # Aggregated Auxillary Information
         self.dissimilar_thresh = nn.Parameter(torch.ones((1))+1)
         self.graph_net = clones(nn.ModuleList([
-            GraphConvolution(self.hidden_dim, self.hidden_dim, bias=True),
-            GraphConvolution(self.hidden_dim, self.hidden_dim, bias=True)
+            GraphConvolution(hidden_dim, hidden_dim, bias=True),
+            GraphConvolution(hidden_dim, hidden_dim, bias=True)
         ]), NUM_MISS_MODALS)
 
         # Adaptive Modality Imputation
         self.adapt_self = clones(
-            nn.Linear(self.hidden_dim, 1), NUM_MISS_MODALS)
+            nn.Linear(hidden_dim, 1), NUM_MISS_MODALS)
         self.adapt_other = clones(
-            nn.Linear(self.hidden_dim, 1), NUM_MISS_MODALS)
+            nn.Linear(hidden_dim, 1), NUM_MISS_MODALS)
 
         # Multimodal Interaction Capture
-        self.modal_type_embeddings = nn.Embedding(MODAL_NUM, self.hidden_dim)
+        self.modal_type_embeddings = nn.Embedding(MODAL_NUM, hidden_dim)
         self.modal_type_embeddings.apply(init_weights)
 
         self.mm_tran = nn.ModuleList([
