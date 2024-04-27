@@ -1,8 +1,8 @@
-from util import (clones, init_weights, guassian_kernel)
+from torch.nn import functional as F
+from general.util import (clones, init_weights, guassian_kernel)
+from general.model import (GraphConvolution, MultiModalTransformer)
 from torch import nn
-from components import (GraphConvolution, MultiModalTransformer)
 from typing import List
-import torch.nn.functional as F
 import torch
 
 GK_MUL = 2.0

@@ -1,6 +1,6 @@
 from torch import functional as F
 from torch import (nn, Tensor)
-from util import clones
+from general.util import clones
 import torch
 import math
 
