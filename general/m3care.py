@@ -23,7 +23,7 @@ class M3Care(nn.Module):
 
         # General parameters
         self.num_modals = len(unimodal_models)
-        self.num_miss_modals = sum(unimodal_models)
+        self.num_miss_modals = sum(missing_modals)
         self.hidden_dim = hidden_dim
         self.device = device
 
@@ -34,6 +34,7 @@ class M3Care(nn.Module):
         self.modal_miss_idxs = [i for i, b in enumerate(missing_modals) if b]
 
         # Modality similarity calculation
+        self.relu = nn.ReLU()
         self.simi_proj = clones(nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim, bias=True),
             self.relu,
@@ -102,7 +103,7 @@ class M3Care(nn.Module):
             modal_embs.append(modal_emb)
             modal_msks.append(modal_msk)
 
-            modal_msks = torch.stack(modal_msks)  # M x B x 1
+        modal_msks = torch.stack(modal_msks)  # M x B x 1
 
         ### ----- Missing Modality Matrices ----- ###
 
@@ -174,16 +175,17 @@ class M3Care(nn.Module):
         ### ----- Multimodal Interaction Capture ----- ###
 
         for modal_idx in range(self.num_modals):
-            modal_embs[modal_idx] += self.modal_type_embeddings[modal_idx](
-                modal_idx * torch.ones((1, self.hidden_dim))).to(self.device)
+            modal_embs[modal_idx] += self.modal_type_embeddings(
+                torch.IntTensor([modal_idx]).to(self.device))
 
             modal_embs[modal_idx].unsqueeze(1)
 
         # modal_embs: B x 1 x D_model
 
         z_mask = modal_msks.int().squeeze(-1).transpose(0, 1)  # B x M
-        z0 = torch.cat(modal_embs, dim=1)  # B x M x Dmodel
+        z0 = torch.stack(modal_embs, dim=1)  # B x M x Dmodel
 
+        print(f"Z0: {z0.shape}\nZM: {z_mask.shape}")
         z1 = F.relu(self.mm_tran[0](z0, z_mask))  # B x M x Dmodel
         z2 = F.relu(self.mm_tran[1](z1, z_mask))  # B x M x Dmodel
 

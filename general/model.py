@@ -1,4 +1,4 @@
-from torch import functional as F
+from torch.nn import functional as F
 from torch import (nn, Tensor)
 from general.util import clones
 import torch
@@ -123,6 +123,7 @@ class MultiHeadedAttention(nn.Module):
         if mask is not None:
             # Same mask applied to all h heads.
             mask = mask.unsqueeze(1)
+            mask = mask.unsqueeze(-1)
         nbatches = query.size(0)
 
         # 1) Do all the linear projections in batch from d_model => h x d_k
