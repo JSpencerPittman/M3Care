@@ -1,4 +1,4 @@
-from torch import nn
+from torch import (nn, Tensor)
 import copy
 import torch
 
@@ -6,6 +6,13 @@ import torch
 def clones(module, N):
     "Produce N identical layers."
     return nn.ModuleList([copy.deepcopy(module) for _ in range(N)])
+
+
+x_idx = 0
+for r_idx, b in enumerate(msk):
+    if b.item():
+        res[r_idx] = x[x_idx]
+        x_idx += 1
 
 
 def init_weights(module):

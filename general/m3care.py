@@ -86,19 +86,23 @@ class M3Care(nn.Module):
 
         ### ----- Unimodal Feature Extraction ----- ###
 
-        # Non-missing modalities
         modal_embs = []  # Each: B x Dmodel
         modal_msks = []  # Each: B x 1
 
         for modal_idx in range(self.num_modals):
-            modal_emb = self.unimodal_models[modal_idx](
-                modal_inputs[modal_idx])
             if modal_idx in self.modal_full_idxs:
+
                 modal_msk = (torch.ones(batch_size, 1) == 1).to(self.device)
+                modal_emb = self.unimodal_models[modal_idx](
+                    modal_inputs[modal_idx])
+
             else:
+
                 miss_idx = self.modal_miss_idxs.index(modal_idx)
-                modal_msk = torch.zeros(
+                modal_msk = torch.from_numpy(
                     missing[:, miss_idx]).unsqueeze(-1).to(self.device)
+                modal_emb = self.unimodal_models[modal_idx](
+                    modal_inputs[modal_idx], modal_msk)
 
             modal_embs.append(modal_emb)
             modal_msks.append(modal_msk)
@@ -168,7 +172,7 @@ class M3Care(nn.Module):
             modal_impute = (
                 modal_self_info * modal_embs[modal_idx]) + (modal_other_info * modal_embs[modal_idx])
             modal_impute = (
-                modal_impute * modal_mask_mats[modal_idx]) + (~modal_mask_mats[modal_idx] * modal_auxs[miss_idx])
+                modal_impute * modal_msks[modal_idx]) + (~modal_msks[modal_idx] * modal_auxs[miss_idx])
 
             modal_embs[modal_idx] = modal_impute
 

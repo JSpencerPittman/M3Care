@@ -1,5 +1,5 @@
 from torch.utils.data import Dataset
-from vocab import Vocab
+from mimic.vocab import Vocab
 import numpy as np
 import pandas as pd
 import os
