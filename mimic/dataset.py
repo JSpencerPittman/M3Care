@@ -50,9 +50,11 @@ class MIMICDataset(Dataset):
 
     def __getitem__(self, item_idx):
         pat_id = self.indexes[item_idx]
+        if type(pat_id) == np.ndarray:
+            pat_id.sort()
 
         dem = self.demographics.loc[pat_id]
-        dem = np.array(dem.values).astype(np.float64)
+        dem = dem.values.astype(np.float64)
 
         vit = self.vitals.loc[pat_id]
         vit, vit_msk = self._format_ts_batch(vit)
@@ -60,7 +62,7 @@ class MIMICDataset(Dataset):
         itv = self.interventions.loc[pat_id]
         itv, itv_msk = self._format_ts_batch(itv)
 
-        lbl = self.labels.loc[pat_id]
+        lbl = self.labels.loc[pat_id].values
 
         if type(pat_id) != np.ndarray:
             nst, nts, nst_msk, nts_msk = self._getpatient_notes(pat_id)
