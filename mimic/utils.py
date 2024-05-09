@@ -1,18 +1,13 @@
 from torch import (nn, Tensor)
+import numpy as np
 import copy
 import torch
+from typing import List
 
 
 def clones(module, N):
     "Produce N identical layers."
     return nn.ModuleList([copy.deepcopy(module) for _ in range(N)])
-
-
-x_idx = 0
-for r_idx, b in enumerate(msk):
-    if b.item():
-        res[r_idx] = x[x_idx]
-        x_idx += 1
 
 
 def init_weights(module):
@@ -51,3 +46,46 @@ def guassian_kernel(source, kernel_mul=2.0, kernel_num=1, fix_sigma=None):
     kernel_val = [torch.exp(-L2_distance/bandwidth_temp)
                   for bandwidth_temp in bandwidth_list]
     return sum(kernel_val)/len(kernel_val)
+
+
+def pad_axis(arr: np.array, fill_to: int, axis: int):
+    assert axis < arr.ndim
+
+    curr_dim = arr.shape[axis]
+    padding = [(0, 0)] * arr.ndim
+    padding[axis] = (0, fill_to-curr_dim)
+    return np.pad(arr, padding)
+
+
+def padded_stack(mat: List[np.array], fill_dims=None):
+    ndim = mat[0].ndim
+
+    if fill_dims is None:
+        fill_dims = np.max([sub.shape for sub in mat], axis=0)
+    elif ndim == 1 and type(fill_dims) == int:
+        fill_dims = [fill_dims]
+    else:
+        max_dims = np.max([sub.shape for sub in mat], axis=0)
+        fill_dims = [mdim if dim == -1 else dim for mdim,
+                     dim in zip(max_dims, fill_dims)]
+
+    padded_mats = []
+    for submat in mat:
+        padding = [(0, fill_to-dim)
+                   for dim, fill_to in zip(submat.shape, fill_dims)]
+        padded_mats.append(np.pad(submat, padding))
+
+    return np.array(padded_mats)
+
+
+def pad_missing(mat: np.array, mask: np.array):
+    new_shape = mask.shape[0:1] + mat.shape[1:]
+    full = np.zeros(new_shape)
+
+    mask_idx = 0
+    for full_idx, exists in enumerate(mask):
+        if exists:
+            full[full_idx] = mat[mask_idx]
+            mask_idx += 1
+
+    return full
