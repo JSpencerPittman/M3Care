@@ -25,6 +25,7 @@ class MIMICDataset(Dataset):
             self.vitals = pd.read_csv(os.path.join(data_path, 'vitals.csv'))
             self.interventions = pd.read_csv(
                 os.path.join(data_path, 'interventions.csv'))
+            self.labels = pd.read_csv(os.path.join(data_path, 'labels.csv'))
 
             self.vocab = Vocab.from_json(
                 os.path.join(processed_dir, 'vocab.json'))
@@ -37,6 +38,7 @@ class MIMICDataset(Dataset):
         self.demographics.set_index('pat_id', inplace=True)
         self.vitals.set_index(['pat_id', 'hours_in'], inplace=True)
         self.interventions.set_index(['pat_id', 'hours_in'], inplace=True)
+        self.labels = self.labels.set_index('pat_id')['Dead']
 
         with h5py.File(self.notes_static_path, 'r') as f:
             self.nst_ids = set([int(k.split('_')[-1]) for k in list(f.keys())])
@@ -58,12 +60,14 @@ class MIMICDataset(Dataset):
         itv = self.interventions.loc[pat_id]
         itv, itv_msk = self._format_ts_batch(itv)
 
+        lbl = self.labels.loc[pat_id]
+
         if type(pat_id) != np.ndarray:
             nst, nts, nst_msk, nts_msk = self._getpatient_notes(pat_id)
         else:
             nst, nts, nst_msk, nts_msk = self._getpatients_notes(pat_id)
 
-        return dem, vit, itv, nst, nts, vit_msk, itv_msk, nst_msk, nts_msk
+        return dem, vit, itv, nst, nts, vit_msk, itv_msk, nst_msk, nts_msk, lbl
 
     def _getpatient_notes(self, pat_id):
         nst, nts = np.zeros(0), np.empty(0)
