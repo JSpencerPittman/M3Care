@@ -64,7 +64,7 @@ class TimeSeriesTransformer(nn.Module):
 ### --- Static Notes Modality --- ###
 
 
-SEP_TOKEN = '[SEP]'
+SEP_TOKEN = '[sep]'
 
 
 class NLEmbedder(nn.Module):
@@ -75,28 +75,17 @@ class NLEmbedder(nn.Module):
         self.pos_encode = PositionalEncoding(model_dim, dropout)
         self.enc_layer = nn.TransformerEncoderLayer(
             model_dim, tran_heads, tran_dff, dropout, batch_first=True)
+        self.avg_pool = nn.AdaptiveAvgPool1d(1)
 
-    def forward(self, x, msk=None):
+    def forward(self, x, mask: Tensor):
+        pad_mask = ~mask.bool()
+
         x = self.word_embed(x)
         x = self.pos_encode(x)
-        x = self.enc_layer(x)
-        x = x.mean(dim=1)
-        if msk is not None:
-            x = self.fill_to_mask(x, msk)
+        x = self.enc_layer(x, src_key_padding_mask=pad_mask)
+        x = self.avg_pool(x.transpose(1, 2)).squeeze()
+
         return x
-
-    def fill_to_mask(self, x: Tensor, msk: Tensor):
-        batch_size, feat_size = msk.size(0), x.size(-1)
-        filled = torch.zeros((batch_size, feat_size),
-                             dtype=x.dtype).to(next(self.parameters()).device)
-
-        f_idx = 0
-        for idx, m in enumerate(msk):
-            if not m.item():
-                filled[idx] = x[f_idx]
-                f_idx += 1
-
-        return filled
 
 
 class WordEmbedder(nn.Module):
