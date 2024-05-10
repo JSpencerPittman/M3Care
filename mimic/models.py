@@ -35,21 +35,31 @@ class MLP(nn.Module):
 ### --- Time-Series Tabular Modality --- ###
 
 
-class TimeSeriesGRU(nn.Module):
+class TimeSeriesTransformer(nn.Module):
     def __init__(self,
-                 in_features: int,
-                 out_features: int,
-                 num_layers: int,
-                 bias=True,
-                 batch_first=False,
-                 dropout=0.0):
-        super(TimeSeriesGRU, self).__init__()
+                 d_input: int,
+                 d_model: int,
+                 dropout: float = 0.1,
+                 max_len: int = 5000,
+                 nhead: int = 8):
+        super(TimeSeriesTransformer, self).__init__()
 
-        self.gru = nn.GRU(in_features, out_features, num_layers,
-                          bias=bias, batch_first=batch_first, dropout=dropout)
+        self.mlp = MLP(d_input, [int((d_input+d_model)/2)],
+                       d_model, bias=True, relu=True)
 
-    def forward(self, x: Tensor):
-        return self.gru(x)[1][-1]
+        self.pos_enc = PositionalEncoding(d_model, dropout, max_len)
+
+        self.tran_enc_layer = nn.TransformerEncoderLayer(
+            d_model, nhead, d_model*4, dropout, batch_first=True)
+        self.tran_enc = nn.TransformerEncoder(self.tran_enc_layer, 1)
+
+    def forward(self, x: Tensor, mask: Tensor):
+        pad_mask = ~mask.bool()
+
+        x = self.mlp(x)
+        x = self.pos_enc(x)
+        x = self.tran_enc(x, src_key_padding_mask=pad_mask)
+        return x
 
 ### --- Static Notes Modality --- ###
 
