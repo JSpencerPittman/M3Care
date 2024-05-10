@@ -62,50 +62,64 @@ class MIMICDataset(Dataset):
         itv = self.interventions.loc[pat_id]
         itv, itv_msk = self._format_ts_batch(itv)
 
-        lbl = self.labels.loc[pat_id].values
-
         if type(pat_id) != np.ndarray:
-            nst, nts, nst_msk, nts_msk = self._getpatient_notes(pat_id)
+            nst, nts, nst_msk, nts_msk, lbl = self._getpatient_notes(pat_id)
         else:
-            nst, nts, nst_msk, nts_msk = self._getpatients_notes(pat_id)
+            nst, nts, nst_msk, nts_msk, lbl = self._getpatients_notes(pat_id)
 
         return dem, vit, itv, nst, nts, vit_msk, itv_msk, nst_msk, nts_msk, lbl
 
     def _getpatient_notes(self, pat_id):
         nst, nts = np.zeros(0), np.empty(0)
-        nst_msk, nts_msk = np.zeros(1), np.zeros(NOTES_TIME_DIM)
+        nst_msk, nts_msk = np.zeros(1), np.zeros((NOTES_TIME_DIM, 1))
 
         if pat_id in self.nst_ids:
             with h5py.File(self.notes_static_path, 'r') as f:
                 nst = f[f'pat_id_{pat_id}'][:]
-                nst_msk[0] = 1
+                nst_msk = np.ones(len(nst))
 
         if pat_id in self.nts_ids:
             with h5py.File(self.notes_ts_path, 'r') as f:
                 nts, nts_msk = self._format_notes_ts_group(
                     f[f'pat_id_{pat_id}'])
 
-        return nst, nts, nst_msk, nts_msk
+        lbl = self.labels.loc[pat_id]
+
+        return nst, nts, nst_msk, nts_msk, lbl
 
     def _getpatients_notes(self, pat_ids):
+        batch_size = len(pat_ids)
+
+        ### --- Static Notes --- ###
+
+        # Extract the  notes
         match_nst = set(
             [pat_id for pat_id in pat_ids if pat_id in self.nst_ids])
-        nst, nst_msk = [], np.zeros(len(pat_ids))
+        nst, nst_lens = [], np.zeros(batch_size, dtype=int)
         with h5py.File(self.notes_static_path, 'r') as f:
             for pidx, pid in enumerate(pat_ids):
                 if pid in match_nst:
                     nst.append(f[f'pat_id_{pid}'][:])
-                    nst_msk[pidx] = 1
+                    nst_lens[pidx] = len(nst[-1])
 
+        # Create mask
+        nst_msk = np.zeros((batch_size, nst_lens.max()))
+        for idx, nst_len in enumerate(nst_lens):
+            nst_msk[idx, :nst_len] = 1
+
+        # Pad the notes
         if len(match_nst):
             nst = padded_stack(nst)
-            nst = pad_missing(nst, nst_msk)
+            nst = pad_missing(nst, nst_lens > 0)
         else:
-            nst = np.zeros((len(pat_ids), 1))
+            nst = np.zeros((batch_size, 1))
 
+        ### --- Notes time-series --- ###
+
+        # Extract the notes
         match_nts = set(
             [pat_id for pat_id in pat_ids if pat_id in self.nts_ids])
-        nts, nts_msk = [], np.zeros((len(pat_ids), NOTES_TIME_DIM))
+        nts, nts_msk = [], [np.zeros((NOTES_TIME_DIM, 1))] * batch_size
         with h5py.File(self.notes_ts_path, 'r') as f:
             for pidx, pid in enumerate(pat_ids):
                 if pid in match_nts:
@@ -114,13 +128,18 @@ class MIMICDataset(Dataset):
                     nts.append(gnotes)
                     nts_msk[pidx] = gmask
 
+        nts_msk = padded_stack(nts_msk)
+
+        # Pad the notes
         if len(match_nts):
             nts = padded_stack(nts)
-            nts = pad_missing(nts, nts_msk.sum(axis=1) > 0)
+            nts = pad_missing(nts, np.sum(nts_msk, axis=(1, 2)) > 0)
         else:
             nts = np.zeros((len(pat_ids), NOTES_TIME_DIM, 1))
 
-        return nst, nts, nst_msk, nts_msk
+        lbl = self.labels.loc[pat_ids].values
+
+        return nst, nts, nst_msk, nts_msk, lbl
 
     @staticmethod
     def _format_ts_batch(batch_ts_df):
@@ -149,18 +168,21 @@ class MIMICDataset(Dataset):
     @staticmethod
     def _format_notes_ts_group(nts_group):
         group_size = len(nts_group)
-        times, notes = [0]*group_size, [0]*group_size
+        times, notes, lens = [0]*group_size, [0] * \
+            group_size, np.zeros(group_size, dtype=int)
+
         for d in nts_group.keys():
             _, gidx, _, time = d.split('_')
             gidx, time = int(gidx), int(time)
             times[gidx] = time
             notes[gidx] = nts_group[d][:]
+            lens[gidx] = len(notes[gidx])
 
-        mask = np.zeros(NOTES_TIME_DIM)
-        for idx in times:
-            mask[idx] = 1
+        mask = np.zeros((NOTES_TIME_DIM, lens.max()))
+        for t, l in zip(times, lens):
+            mask[t, :l] = 1
 
         notes = padded_stack(notes)
-        notes = pad_missing(notes, mask)
+        notes = pad_missing(notes, mask.sum(axis=1) > 0)
 
         return notes, mask
