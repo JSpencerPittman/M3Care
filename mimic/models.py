@@ -145,7 +145,6 @@ class PositionalEncoding(nn.Module):
 
 ### --- Time-Series Notes Modality --- ###
 
-
 class TimeSeriesNLEmbedder(nn.Module):
     def __init__(self, vocab, embed_dim, model_dim, tran_heads, tran_dff, vocab_size=10000, dropout=0.3):
         super(TimeSeriesNLEmbedder, self).__init__()
@@ -153,37 +152,13 @@ class TimeSeriesNLEmbedder(nn.Module):
         self.nl_embedder = NLEmbedder(
             vocab, embed_dim, model_dim, tran_heads, tran_dff, vocab_size, dropout)
 
-        self.time2vec = Time2Vec()
+    def forward(self, x: Tensor, mask: Tensor):
+        # x: BxTxS, m: BxTxS
+        batch_size, time_steps, seq_len = x.shape
 
-    # def forward(self, times, cats, notes):
-    def forward(self, x, msk):
-        for pat_x in x:
-            emb_x = self.forward_patient(pat_x)
+        x = x.view((batch_size*time_steps, -1))
+        mask = mask.view((batch_size*time_steps, -1))
 
-    def forward_patient(self, x):
-        times, cats, notes = x
+        x = self.nl_embedder(x, mask).view((batch_size, time_steps, -1))
 
-        times = torch.from_numpy(times).to(next(self.parameters()).device)
-        cats = torch.from_numpy(cats).to(next(self.parameters()).device)
-        notes = torch.from_numpy(notes).to(next(self.parameters()).device)
-
-        notes = self.nl_embedder(notes)
-
-        times = self.time2vec(times)
-
-        return torch.cat([times.unsqueeze(1), cats, notes], dim=1)
-
-
-class Time2Vec(nn.Module):
-    def __init__(self, max_len=5000):
-        super(Time2Vec, self).__init__()
-
-        self.omega = nn.Parameter(torch.randn(max_len))
-        self.phi = nn.Parameter(torch.randn(max_len))
-
-    def forward(self, tau):
-        seq_len = tau.size(0)
-        zero_start = bool(tau[0] == 0)
-        tau = (tau*self.omega[:seq_len]) + self.phi[:seq_len]
-        tau[zero_start:] = torch.sin(tau[zero_start:])
-        return tau
+        return x
