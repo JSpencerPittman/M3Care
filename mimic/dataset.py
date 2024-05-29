@@ -102,17 +102,18 @@ class MIMICDataset(Dataset):
                     nst.append(f[f'pat_id_{pid}'][:])
                     nst_lens[pidx] = len(nst[-1])
 
-        # Create mask
-        nst_msk = np.zeros((batch_size, nst_lens.max()))
-        for idx, nst_len in enumerate(nst_lens):
-            nst_msk[idx, :nst_len] = 1
-
-        # Pad the notes
+        # Pad the notes & create masks
         if len(match_nst):
             nst = padded_stack(nst)
             nst = pad_missing(nst, nst_lens > 0)
+
+            nst_msk = np.zeros((batch_size, nst_lens.max()))
+            for idx, nst_len in enumerate(nst_lens):
+                nst_msk[idx, :nst_len] = 1
+
         else:
             nst = np.zeros((batch_size, 1))
+            nst_msk = np.zeros((batch_size, 1))
 
         ### --- Notes time-series --- ###
 
