@@ -54,12 +54,12 @@ class TimeSeriesTransformer(nn.Module):
         self.tran_enc = nn.TransformerEncoder(self.tran_enc_layer, 1)
 
     def forward(self, x: Tensor, mask: Tensor):
-        pad_mask = ~mask.bool()
+        pad_mask = ~mask
 
         x = self.mlp(x)
         x = self.pos_enc(x)
         x = self.tran_enc(x, src_key_padding_mask=pad_mask)
-        return x
+        return x, mask
 
 ### --- Static Notes Modality --- ###
 
@@ -78,14 +78,17 @@ class NLEmbedder(nn.Module):
         self.avg_pool = nn.AdaptiveAvgPool1d(1)
 
     def forward(self, x, mask: Tensor):
-        pad_mask = ~mask.bool()
+        pad_mask = ~mask
 
         x = self.word_embed(x)
         x = self.pos_encode(x)
         x = self.enc_layer(x, src_key_padding_mask=pad_mask)
+        x = x.nan_to_num()
         x = self.avg_pool(x.transpose(1, 2)).squeeze()
 
-        return x
+        mask = (mask.int().sum(axis=-1) > 0).bool().unsqueeze(-1)
+
+        return x, mask
 
 
 class WordEmbedder(nn.Module):
@@ -157,8 +160,11 @@ class TimeSeriesNLEmbedder(nn.Module):
         batch_size, time_steps, seq_len = x.shape
 
         x = x.view((batch_size*time_steps, -1))
-        mask = mask.view((batch_size*time_steps, -1))
+        mask_nle = mask.view((batch_size*time_steps, -1))
 
-        x = self.nl_embedder(x, mask).view((batch_size, time_steps, -1))
+        x, mask_nle = self.nl_embedder(x, mask_nle)
 
-        return x
+        x = x.view((batch_size, time_steps, -1))
+        mask = (mask.int().sum(axis=2) > 0).bool()
+
+        return x, mask
