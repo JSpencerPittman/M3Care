@@ -34,54 +34,95 @@ class GraphConvolution(nn.Module):
 
 
 class MultiModalTransformer(nn.Module):
-    def __init__(self, input_dim, d_model,  MHD_num_head, d_ff, output_dim, keep_prob=0.5):
+    def __init__(self, d_input: int, d_model: int, d_ff: int, num_heads: int, keep_prob=0.5):
         super(MultiModalTransformer, self).__init__()
 
-        # hyperparameters
-        self.input_dim = input_dim
+        assert (d_model % num_heads == 0)
+
+        # General parameters
+        self.d_input = d_input
         self.d_model = d_model
-        self.MHD_num_head = MHD_num_head
-        self.d_ff = d_ff
-        self.output_dim = output_dim
-        self.keep_prob = keep_prob
+        self.num_heads = num_heads
 
-        # layers
-        self.embed = nn.Linear(self.input_dim, self.d_model)
+        # Layers
+        self.proj = nn.Linear(d_input, d_model)
+        self.pos_encode = PositionalEncoding(d_model, dropout=(1-keep_prob))
 
-        self.PositionalEncoding = PositionalEncoding(
-            self.d_model, dropout=0, max_len=5000)
+        self.norm = clones(nn.LayerNorm(d_model), 2)
+        tran_enc_lay = nn.TransformerEncoderLayer(
+            d_model, num_heads, d_ff, (1-keep_prob), batch_first=True)
+        self.tran_enc = nn.TransformerEncoder(
+            tran_enc_lay, 1, norm=self.norm[0])
 
-        self.MultiHeadedAttention = MultiHeadedAttention(
-            self.MHD_num_head, self.d_model)
-        self.SublayerConnection = SublayerConnection(
-            self.d_model, dropout=1 - self.keep_prob)
+        self.dropout = nn.Dropout(1-keep_prob)
+        self.pos_ff = PositionwiseFeedForward(
+            d_model, d_ff, dropout=(1-keep_prob))
 
-        self.PositionwiseFeedForward = PositionwiseFeedForward(
-            self.d_model, self.d_ff, dropout=0.1)
-        self.output = nn.Linear(self.d_model, self.output_dim)
+    def forward(self, x: Tensor, mask: Tensor):
+        # X: B x T x D_input
+        assert (x.size(-1) == self.d_input)
 
-        self.dropout = nn.Dropout(p=1 - self.keep_prob)
-        self.tanh = nn.Tanh()
-        self.softmax = nn.Softmax()
-        self.sigmoid = nn.Sigmoid()
-        self.relu = nn.ReLU()
+        print("X1: ", x[:10])
+        x = self.proj(x)  # B x T x D_model
+        print("X2: ", x[:10])
+        x = self.pos_encode(x)
+        print("X3: ", x[:10])
+        # x = self.tran_enc(x, mask=mask)
+        x = self.tran_enc(x)
+        print("X4: ", x[:10])
 
-    def forward(self, input, mask):
-        # input shape [batch_size, timestep, feature_dim]
-        feature_dim = input.size(2)
-        assert (feature_dim == self.input_dim)
-        assert (self.d_model % self.MHD_num_head == 0)
+        x = x + self.dropout(self.norm[1](self.pos_ff(x)))
 
-        input = self.embed(input)
-        input = self.PositionalEncoding(input)  # b t d_model
+        return x
+# class MultiModalTransformer(nn.Module):
+#     def __init__(self, input_dim, d_model,  MHD_num_head, d_ff, output_dim, keep_prob=0.5):
+#         super(MultiModalTransformer, self).__init__()
 
-        contexts = self.SublayerConnection(input, lambda x: self.MultiHeadedAttention(
-            input, input, input, mask))  # b t d_model
+#         # hyperparameters
+#         self.input_dim = input_dim
+#         self.d_model = d_model
+#         self.MHD_num_head = MHD_num_head
+#         self.d_ff = d_ff
+#         self.output_dim = output_dim
+#         self.keep_prob = keep_prob
 
-        contexts = self.SublayerConnection(
-            contexts, lambda x: self.PositionwiseFeedForward(contexts))  # b t d_model
+#         # layers
+#         self.embed = nn.Linear(self.input_dim, self.d_model)
 
-        return contexts  # b t h
+#         self.PositionalEncoding = PositionalEncoding(
+#             self.d_model, dropout=0, max_len=5000)
+
+#         self.MultiHeadedAttention = MultiHeadedAttention(
+#             self.MHD_num_head, self.d_model)
+#         self.SublayerConnection = SublayerConnection(
+#             self.d_model, dropout=1 - self.keep_prob)
+
+#         self.PositionwiseFeedForward = PositionwiseFeedForward(
+#             self.d_model, self.d_ff, dropout=0.1)
+#         self.output = nn.Linear(self.d_model, self.output_dim)
+
+#         self.dropout = nn.Dropout(p=1 - self.keep_prob)
+#         self.tanh = nn.Tanh()
+#         self.softmax = nn.Softmax()
+#         self.sigmoid = nn.Sigmoid()
+#         self.relu = nn.ReLU()
+
+#     def forward(self, input, mask):
+#         # Input: B x T x D_model
+#         feature_dim = input.size(2)
+#         assert (feature_dim == self.input_dim)
+#         assert (self.d_model % self.MHD_num_head == 0)
+
+#         input = self.embed(input)  # B x T x D_model
+#         input = self.PositionalEncoding(input)  # B x T x D_model
+
+#         contexts = self.SublayerConnection(input, lambda x: self.MultiHeadedAttention(
+#             input, input, input, mask))  # B x T x D_model
+
+#         contexts = self.SublayerConnection(
+#             contexts, lambda x: self.PositionwiseFeedForward(contexts))  # b t d_model
+
+#         return contexts  # b t h
 
 
 class PositionalEncoding(nn.Module):
@@ -130,8 +171,6 @@ class MultiHeadedAttention(nn.Module):
         query, key, value = \
             [l(x).view(nbatches, -1, self.h, self.d_k).transpose(1, 2)
              for l, x in zip(self.linears, (query, key, value))]
-        print("Q, K, V found")
-        print(f"Q {query.shape} K {key.shape} V {value.shape}")
 
         # 2) Apply attention on all the projected vectors in batch.
         x, self.attn = attention_head(query, key, value, mask=mask,
