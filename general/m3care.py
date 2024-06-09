@@ -77,13 +77,6 @@ class M3Care(nn.Module):
         self.modal_type_embeddings = nn.Embedding(self.num_modals, hidden_dim)
         self.modal_type_embeddings.apply(init_weights)
 
-        # self.mm_tran = nn.ModuleList([
-        #     MultiModalTransformer(input_dim=hidden_dim, d_model=hidden_dim,
-        #                           MHD_num_head=4, d_ff=hidden_dim*4, output_dim=1),
-        #     MultiModalTransformer(input_dim=hidden_dim, d_model=hidden_dim,
-        #                           MHD_num_head=1, d_ff=hidden_dim*4, output_dim=1)
-        # ])
-
         self.mm_tran = nn.ModuleList([
             MultiModalTransformer(d_input=hidden_dim, d_model=hidden_dim,
                                   d_ff=4*hidden_dim, num_heads=MM_TRAN_NHEADS[0]),
@@ -98,19 +91,11 @@ class M3Care(nn.Module):
             nn.Linear(hidden_dim*self.num_embeddings, hidden_dim*2),
             nn.Linear(hidden_dim*2, output_dim)
         ])
-        # self.output_fcs = nn.ModuleList([
-        #     nn.Linear(hidden_dim*self.num_modals, hidden_dim*2),
-        #     nn.Linear(hidden_dim*2, output_dim)
-        # ])
         self.dropout = nn.Dropout(1-keep_prob)
 
     def forward(self, *inputs):
         # [Modalities], [masks], batch_size
         assert len(inputs) == self.num_modals + self.num_msk_modals + 1
-
-        # modal_inputs = inputs[:-2]
-        # missing = inputs[-2]
-        # batch_size = inputs[-1]
 
         modals_inp = inputs[:self.num_modals]
         modals_inp_msks = inputs[self.num_modals:-1]
@@ -122,9 +107,6 @@ class M3Care(nn.Module):
         modal_msks_orig = []  # Each: Static -> B ; TS -> B x T
         modal_embs = []  # Each: B x Dmodel
         modal_msks = []  # Each: B x 1
-
-        # modal_embs = []  # Each: B x Dmodel
-        # modal_msks = []  # Each: B x 1
 
         for modal_idx in range(self.num_modals):
             modal_emb: None | Tensor = None
@@ -158,23 +140,6 @@ class M3Care(nn.Module):
             else:
                 modal_embs.append(modal_emb)
                 modal_msks.append(modal_msk)
-
-            # if modal_idx in self.modal_full_idxs:
-
-            #     modal_msk = (torch.ones(batch_size, 1) == 1).to(self.device)
-            #     modal_emb = self.unimodal_models[modal_idx](
-            #         modal_inputs[modal_idx])
-
-            # else:
-
-            #     miss_idx = self.modal_miss_idxs.index(modal_idx)
-            #     modal_msk = torch.from_numpy(
-            #         missing[:, miss_idx]).unsqueeze(-1).to(self.device)
-            #     modal_emb = self.unimodal_models[modal_idx](
-            #         modal_inputs[modal_idx], modal_msk)
-
-            # modal_embs.append(modal_emb)
-            # modal_msks.append(modal_msk)
 
         modal_msks = torch.stack(modal_msks)  # M x B x 1
 
@@ -262,13 +227,10 @@ class M3Care(nn.Module):
                 modal_embs_orig[modal_idx] = self.pos_encode(
                     modal_embs_orig[modal_idx])
 
-        # modal_embs[modal_idx].unsqueeze(1)
-
         # modal_embs_orig: B x T x D_model
 
         z0 = torch.concat(modal_embs_orig, dim=1)  # B x T(All) x D_model
 
-        print("Z0: ", z0.shape)
         z_mask = torch.concat(
             modal_msks_orig, dim=1).unsqueeze(-1)  # B x T(All) x 1
         z_mask = z_mask * z_mask.transpose(-1, -2)  # B x T(All) x T(All)
@@ -276,25 +238,13 @@ class M3Care(nn.Module):
         # B x H x T(All) x T(All)
         z_mask0 = torch.concat([z_mask]*MM_TRAN_NHEADS[0], dim=1)
         z_mask1 = torch.concat([z_mask]*MM_TRAN_NHEADS[1], dim=1)
-        print("Z0 MASK: ", z_mask0.shape)
 
         # (B*H) x T(All) x T(All)
         z_mask0 = z_mask0.view(-1, z_mask0.size(-1), z_mask0.size(-1))
         z_mask1 = z_mask1.view(-1, z_mask1.size(-1), z_mask1.size(-1))
 
-        # z_mask = torch.concat([z_mask]*self.num_heads, dim=1)
-        # (B*H) x T(All) x T(All)
-        # z_mask = z_mask.view(-1, z_mask.size(-1), z_mask.size(-1))
-
-        # z_mask = modal_msks.int().squeeze(-1).transpose(0, 1)  # B x M
-        # z0 = torch.stack(modal_embs, dim=1)  # B x M x Dmodel
-
         z1 = F.relu(self.mm_tran[0](z0, z_mask0))  # B x T(All) x Dmodel
-        print("Z1: ", z1[:10])
         z2 = F.relu(self.mm_tran[1](z1, z_mask1))  # B x T(All) x Dmodel
-        print("Z2: ", z2[:10])
-        # z1 = F.relu(self.mm_tran[0](z0, z_mask))  # B x M x Dmodel
-        # z2 = F.relu(self.mm_tran[1](z1, z_mask))  # B x M x Dmodel
 
         comb_fin = z2.view(batch_size, -1)  # B x (T(All) * Dmodel)
 

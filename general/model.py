@@ -62,67 +62,12 @@ class MultiModalTransformer(nn.Module):
         # X: B x T x D_input
         assert (x.size(-1) == self.d_input)
 
-        print("X1: ", x[:10])
         x = self.proj(x)  # B x T x D_model
-        print("X2: ", x[:10])
         x = self.pos_encode(x)
-        print("X3: ", x[:10])
-        # x = self.tran_enc(x, mask=mask)
-        x = self.tran_enc(x)
-        print("X4: ", x[:10])
-
+        x = self.tran_enc(x, mask=mask)
         x = x + self.dropout(self.norm[1](self.pos_ff(x)))
 
         return x
-# class MultiModalTransformer(nn.Module):
-#     def __init__(self, input_dim, d_model,  MHD_num_head, d_ff, output_dim, keep_prob=0.5):
-#         super(MultiModalTransformer, self).__init__()
-
-#         # hyperparameters
-#         self.input_dim = input_dim
-#         self.d_model = d_model
-#         self.MHD_num_head = MHD_num_head
-#         self.d_ff = d_ff
-#         self.output_dim = output_dim
-#         self.keep_prob = keep_prob
-
-#         # layers
-#         self.embed = nn.Linear(self.input_dim, self.d_model)
-
-#         self.PositionalEncoding = PositionalEncoding(
-#             self.d_model, dropout=0, max_len=5000)
-
-#         self.MultiHeadedAttention = MultiHeadedAttention(
-#             self.MHD_num_head, self.d_model)
-#         self.SublayerConnection = SublayerConnection(
-#             self.d_model, dropout=1 - self.keep_prob)
-
-#         self.PositionwiseFeedForward = PositionwiseFeedForward(
-#             self.d_model, self.d_ff, dropout=0.1)
-#         self.output = nn.Linear(self.d_model, self.output_dim)
-
-#         self.dropout = nn.Dropout(p=1 - self.keep_prob)
-#         self.tanh = nn.Tanh()
-#         self.softmax = nn.Softmax()
-#         self.sigmoid = nn.Sigmoid()
-#         self.relu = nn.ReLU()
-
-#     def forward(self, input, mask):
-#         # Input: B x T x D_model
-#         feature_dim = input.size(2)
-#         assert (feature_dim == self.input_dim)
-#         assert (self.d_model % self.MHD_num_head == 0)
-
-#         input = self.embed(input)  # B x T x D_model
-#         input = self.PositionalEncoding(input)  # B x T x D_model
-
-#         contexts = self.SublayerConnection(input, lambda x: self.MultiHeadedAttention(
-#             input, input, input, mask))  # B x T x D_model
-
-#         contexts = self.SublayerConnection(
-#             contexts, lambda x: self.PositionwiseFeedForward(contexts))  # b t d_model
-
-#         return contexts  # b t h
 
 
 class PositionalEncoding(nn.Module):
