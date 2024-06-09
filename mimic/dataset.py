@@ -30,7 +30,7 @@ class MIMICDataset(Dataset):
             self.vocab = Vocab.from_json(
                 os.path.join(processed_dir, 'vocab.json'))
             self.notes_static_path = os.path.join(data_path, 'notes_static.h5')
-            self.notes_ts_path = os.path.join(data_path, 'notes_ts.h5')
+            # self.notes_ts_path = os.path.join(data_path, 'notes_ts.h5')
         except FileNotFoundError as e:
             print("Make sure data has been processed: ", e)
             return
@@ -42,8 +42,8 @@ class MIMICDataset(Dataset):
 
         with h5py.File(self.notes_static_path, 'r') as f:
             self.nst_ids = set([int(k.split('_')[-1]) for k in list(f.keys())])
-        with h5py.File(self.notes_ts_path, 'r') as f:
-            self.nts_ids = set([int(k.split('_')[-1]) for k in list(f.keys())])
+        # with h5py.File(self.notes_ts_path, 'r') as f:
+        #     self.nts_ids = set([int(k.split('_')[-1]) for k in list(f.keys())])
 
     def __len__(self):
         return len(self.indexes)
@@ -63,29 +63,32 @@ class MIMICDataset(Dataset):
         itv, itv_msk = self._format_ts_batch(itv)
 
         if type(pat_id) != np.ndarray:
-            nst, nts, nst_msk, nts_msk, lbl = self._getpatient_notes(pat_id)
+            # nst, nts, nst_msk, nts_msk, lbl = self._getpatient_notes(pat_id)
+            nst, nst_msk, lbl = self._getpatient_notes(pat_id)
         else:
-            nst, nts, nst_msk, nts_msk, lbl = self._getpatients_notes(pat_id)
+            # nst, nts, nst_msk, nts_msk, lbl = self._getpatients_notes(pat_id)
+            nst, nst_msk, lbl = self._getpatients_notes(pat_id)
 
-        return dem, vit, itv, nst, nts, vit_msk, itv_msk, nst_msk, nts_msk, lbl
+        return dem, vit, itv, nst, vit_msk, itv_msk, nst_msk, lbl
 
     def _getpatient_notes(self, pat_id):
-        nst, nts = np.zeros(0), np.empty(0)
-        nst_msk, nts_msk = np.zeros(1), np.zeros((NOTES_TIME_DIM, 1))
+        # nst, nts = np.zeros(0), np.empty(0)
+        # nst_msk, nts_msk = np.zeros(1), np.zeros((NOTES_TIME_DIM, 1))
+        nst, nst_msk = np.zeros(), np.zeros(1)
 
         if pat_id in self.nst_ids:
             with h5py.File(self.notes_static_path, 'r') as f:
                 nst = f[f'pat_id_{pat_id}'][:]
                 nst_msk = np.ones(len(nst))
 
-        if pat_id in self.nts_ids:
-            with h5py.File(self.notes_ts_path, 'r') as f:
-                nts, nts_msk = self._format_notes_ts_group(
-                    f[f'pat_id_{pat_id}'])
+        # if pat_id in self.nts_ids:
+        #     with h5py.File(self.notes_ts_path, 'r') as f:
+        #         nts, nts_msk = self._format_notes_ts_group(
+        #             f[f'pat_id_{pat_id}'])
 
         lbl = self.labels.loc[pat_id]
 
-        return nst, nts, nst_msk, nts_msk, lbl
+        return nst, nst_msk, lbl
 
     def _getpatients_notes(self, pat_ids):
         batch_size = len(pat_ids)
@@ -118,29 +121,29 @@ class MIMICDataset(Dataset):
         ### --- Notes time-series --- ###
 
         # Extract the notes
-        match_nts = set(
-            [pat_id for pat_id in pat_ids if pat_id in self.nts_ids])
-        nts, nts_msk = [], [np.zeros((NOTES_TIME_DIM, 1))] * batch_size
-        with h5py.File(self.notes_ts_path, 'r') as f:
-            for pidx, pid in enumerate(pat_ids):
-                if pid in match_nts:
-                    gnotes, gmask = self._format_notes_ts_group(
-                        f[f'pat_id_{pid}'])
-                    nts.append(gnotes)
-                    nts_msk[pidx] = gmask
+        # match_nts = set(
+        #     [pat_id for pat_id in pat_ids if pat_id in self.nts_ids])
+        # nts, nts_msk = [], [np.zeros((NOTES_TIME_DIM, 1))] * batch_size
+        # with h5py.File(self.notes_ts_path, 'r') as f:
+        #     for pidx, pid in enumerate(pat_ids):
+        #         if pid in match_nts:
+        #             gnotes, gmask = self._format_notes_ts_group(
+        #                 f[f'pat_id_{pid}'])
+        #             nts.append(gnotes)
+        #             nts_msk[pidx] = gmask
 
-        nts_msk = padded_stack(nts_msk)
+        # nts_msk = padded_stack(nts_msk)
 
         # Pad the notes
-        if len(match_nts):
-            nts = padded_stack(nts)
-            nts = pad_missing(nts, np.sum(nts_msk, axis=(1, 2)) > 0)
-        else:
-            nts = np.zeros((len(pat_ids), NOTES_TIME_DIM, 1))
+        # if len(match_nts):
+        #     nts = padded_stack(nts)
+        #     nts = pad_missing(nts, np.sum(nts_msk, axis=(1, 2)) > 0)
+        # else:
+        #     nts = np.zeros((len(pat_ids), NOTES_TIME_DIM, 1))
 
         lbl = self.labels.loc[pat_ids].values
 
-        return nst, nts, nst_msk, nts_msk, lbl
+        return nst, nst_msk, lbl
 
     @staticmethod
     def _format_ts_batch(batch_ts_df):
