@@ -64,7 +64,7 @@ class MultiModalTransformer(nn.Module):
 
         x = self.proj(x)  # B x T x D_model
         x = self.pos_encode(x)
-        x = self.tran_enc(x, mask=mask)
+        x = self.tran_enc(x, mask=~mask)
         x = x + self.dropout(self.norm[1](self.pos_ff(x)))
 
         return x
