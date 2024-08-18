@@ -1,9 +1,7 @@
 from pathlib import Path
-from typing import TypedDict
 
 import numpy as np
 import pandas as pd
-from torch.utils.data import Dataset
 
 from mimic.datasets.modal_dataset import ModalDataset
 

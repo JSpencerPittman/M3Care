@@ -2,7 +2,6 @@ from pathlib import Path
 
 import h5py
 import numpy as np
-import pandas as pd
 
 from mimic.datasets.modal_dataset import ModalDataset
 from mimic.utils import padded_stack
@@ -10,7 +9,11 @@ from mimic.vocab import Vocab
 
 
 class TSNotesDataset(ModalDataset):
-    def __init__(self, data_path: Path | str, pat_ids: tuple[int], vocab: Vocab, time_dim: int):
+    def __init__(self,
+                 data_path: Path | str,
+                 pat_ids: tuple[int],
+                 vocab: Vocab,
+                 time_dim: int):
         super().__init__(data_path, pat_ids)
         self.vocab = vocab
         self.time_dim = time_dim

@@ -2,6 +2,8 @@ from pathlib import Path
 from typing import Optional, TypedDict
 
 import numpy as np
+import torch
+from torch import Tensor
 from torch.utils.data import Dataset
 
 from mimic.datasets.demographic import DemographicDataset
@@ -52,7 +54,17 @@ class MimicDataset(Dataset):
         "ts_notes": {'pat_ids', 'vocab'}
     }
 
-    def __init__(self, dataset_paths: DatasetPaths, auxillary_paths: AuxillaryPaths):
+    # Ordering of datasets
+    Dataset_Order = ('demographic',
+                     'vitals',
+                     'interventions',
+                     'static_notes',
+                     'ts_notes')
+
+    def __init__(self,
+                 dataset_paths: DatasetPaths,
+                 auxillary_paths: AuxillaryPaths,
+                 device: str = 'cpu'):
         """
         Constructor for MimicDataset.
 
@@ -84,6 +96,25 @@ class MimicDataset(Dataset):
         self.datasets: dict[str, ModalDataset] = {}
         for dataset in self.provided_datasets:
             self._initialize_dataset(dataset)
+
+        self.device = device
+
+    def __getitem__(self,
+                    idx: int | slice) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
+        x, masks = {}, {}
+        for ds in MimicDataset.Dataset_Order:
+            if ds not in self.provided_datasets:
+                continue
+            res = self.datasets[ds][idx]
+            if isinstance(res, tuple):
+                x[ds] = torch.tensor(res[0], dtype=torch.float32, device=self.device)
+                masks[ds] = torch.tensor(res[1], dtype=torch.bool, device=self.device)
+            else:
+                x[ds] = torch.tensor(res, dtype=torch.float32, device=self.device)
+        return x, masks
+
+    def __len__(self) -> int:
+        return len(self.pat_ids)
 
     def _initialize_dataset(self, name: str):
         """
@@ -174,7 +205,7 @@ class MimicDataset(Dataset):
         auxillaries were provided.
 
         Args:
-            auxillary_paths (AuxillaryPaths): A dictionary of the paths to auxillary 
+            auxillary_paths (AuxillaryPaths): A dictionary of the paths to auxillary
                 files.
             provided_datasets (set[str]): All datasets being used.
 
