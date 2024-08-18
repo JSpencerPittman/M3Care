@@ -1,254 +1,368 @@
-from torch.nn import functional as F
-from general.util import (clones, init_weights, guassian_kernel)
-from general.model import (
-    GraphConvolution, MultiModalTransformer, PositionalEncoding)
-from torch import nn, Tensor
-from typing import List
-import torch
+from dataclasses import dataclass
+from typing import Optional, Sequence
 
-GK_MUL = 2.0
-GK_NUM = 3
-MM_TRAN_NHEADS = [4, 1]
+import torch
+from torch import Tensor, nn
+from torch.nn import functional as F
+from torchtyping import TensorType
+
+from general.model import (GraphConvolution, MultiModalTransformer,
+                           PositionalEncoding)
+from general.util import guassian_kernel, init_weights
+
+
+@dataclass
+class Modal(object):
+    name: str
+    model: Tensor
+    masked: bool = False
+    time_dim: Optional[int] = None
 
 
 class M3Care(nn.Module):
+    EmbeddedStaticTensor = TensorType["batch_size", "embed_dim"]
+    EmbeddedSequentialTensor = TensorType["batch_size", "time_dim", "embed_dim"]
+    EmbeddedTensor = EmbeddedStaticTensor | EmbeddedSequentialTensor
+
+    MaskStaticTensor = TensorType["batch_size"]
+    MaskSequentialTensor = TensorType["batch_size", "time_dim"]
+    MaskTensor = MaskStaticTensor | EmbeddedSequentialTensor
+
+    ModalsMaskTensor = TensorType["modal_num", "batch_size"]
+    BatchSimilarityTensor = TensorType["batch_size", "batch_size"]
+    BatchSimilarityMaskTensor = TensorType["batch_size", "batch_size"]
+
+    Scalar = TensorType[()]
+
+    GK_MUL = 2.0
+    GK_NUM = 3
+    MM_TRAN_NHEADS = [4, 1]
+
     def __init__(self,
-                 unimodal_models: nn.ModuleList,
-                 missing_modals: List[bool],
-                 time_modals: List[bool],
-                 timesteps_modals: List[int],
-                 mask_modals: List[bool],
-                 hidden_dim: int,
+                 modals: list[Modal],
+                 embedded_dim: int,
                  output_dim: int,
                  device: str,
-                 keep_prob=1):
-        super(M3Care, self).__init__()
+                 dropout: float = 0.0,
+                 num_heads: Sequence[int] = [4, 1]):
+        super().__init__()
 
-        assert len(unimodal_models) == len(missing_modals)
-        assert len(unimodal_models) == len(time_modals)
-
-        # General parameters
-        self.num_modals = len(unimodal_models)
-        self.num_miss_modals = sum(missing_modals)
-        self.hidden_dim = hidden_dim
+        self.modals = {modal.name: modal for modal in modals}
+        self.modal_names = [modal.name for modal in modals]
+        self.num_modals = len(modals)
+        self.embedded_dim = embedded_dim
         self.device = device
 
-        # Unimodal extractions
-        self.unimodal_models = unimodal_models
-        self.modal_full_idxs = [
-            i for i, b in enumerate(missing_modals) if not b]
-        self.modal_miss_idxs = [i for i, b in enumerate(missing_modals) if b]
-
-        self.modal_time_idxs = [i for i, b in enumerate(time_modals) if b]
-
-        self.modal_msk_idxs = [i for i, b in enumerate(mask_modals) if b]
-        self.num_msk_modals = sum(mask_modals)
-
-        self.modal_timesteps = timesteps_modals
-        self.num_embeddings = sum(self.modal_timesteps) + \
-            self.num_modals - sum(time_modals)
-
         # Modality similarity calculation
-        self.relu = nn.ReLU()
-        self.simi_proj = clones(nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim, bias=True),
-            self.relu,
-            nn.Linear(hidden_dim, hidden_dim, bias=True),
-            self.relu,
-            nn.Linear(hidden_dim, hidden_dim, bias=True),
-        ), self.num_modals)
-        self.simi_bn = nn.BatchNorm1d(hidden_dim)
-        self.simi_eps = nn.Parameter(torch.ones((self.num_modals)+1))
+        self.simi_proj = {modal.name: nn.Sequential(
+                nn.Linear(embedded_dim, embedded_dim, bias=True),
+                nn.ReLU(),
+                nn.Linear(embedded_dim, embedded_dim, bias=True),
+                nn.ReLU(),
+                nn.Linear(embedded_dim, embedded_dim, bias=True))
+            for modal in modals}
+        self.simi_bn = nn.BatchNorm1d(embedded_dim)
+        self.simi_eps = {modal.name: nn.Parameter(torch.ones(1)) for modal in modals}
 
-        # Aggregated Auxillary Information
         self.dissimilar_thresh = nn.Parameter(torch.ones((1))+1)
-        self.graph_net = clones(nn.ModuleList([
-            GraphConvolution(hidden_dim, hidden_dim, bias=True),
-            GraphConvolution(hidden_dim, hidden_dim, bias=True)
-        ]), self.num_miss_modals)
 
-        # Adaptive Modality Imputation
-        self.adapt_self = clones(
-            nn.Linear(hidden_dim, 1), self.num_miss_modals)
-        self.adapt_other = clones(
-            nn.Linear(hidden_dim, 1), self.num_miss_modals)
+        # Modality Auxillary calculation
+        self.graph_net = {modal_name: GraphConvolution(embedded_dim, bias=True)
+                          for modal_name in self.modal_names}
 
-        # Multimodal Interaction Capture
-        self.modal_type_embeddings = nn.Embedding(self.num_modals, hidden_dim)
+        # Adaptive modality imputation
+        self.adapt_self = {modal_name: nn.Linear(embedded_dim, 1)
+                           for modal_name in self.modal_names}
+        self.adapt_other = {modal_name: nn.Linear(embedded_dim, 1)
+                            for modal_name in self.modal_names}
+
+        number_of_embeddings = sum([(1 if modal.time_dim is None else modal.time_dim)
+                                   for modal in self.modals.values()])
+
+        # Multimodal interaction capture
+        self.modal_type_embeddings = nn.Embedding(self.num_modals, embedded_dim)
         self.modal_type_embeddings.apply(init_weights)
+        self.mm_tran = MultiModalTransformer(embedded_dim=embedded_dim,
+                                             num_heads=num_heads,
+                                             dropout=dropout,
+                                             max_len=number_of_embeddings)
 
-        self.mm_tran = nn.ModuleList([
-            MultiModalTransformer(d_input=hidden_dim, d_model=hidden_dim,
-                                  d_ff=4*hidden_dim, num_heads=MM_TRAN_NHEADS[0]),
-            MultiModalTransformer(d_input=hidden_dim, d_model=hidden_dim,
-                                  d_ff=4*hidden_dim, num_heads=MM_TRAN_NHEADS[1])
-        ])
-
-        self.pos_encode = PositionalEncoding(hidden_dim, (1-keep_prob))
+        self.pos_encode = PositionalEncoding(embedded_dim, dropout)
 
         # Final Prediction
         self.output_fcs = nn.ModuleList([
-            nn.Linear(hidden_dim*self.num_embeddings, hidden_dim*2),
-            nn.Linear(hidden_dim*2, output_dim)
+            nn.Linear(embedded_dim*number_of_embeddings, embedded_dim*2),
+            nn.Linear(embedded_dim*2, output_dim)
         ])
-        self.dropout = nn.Dropout(1-keep_prob)
+        self.dropout = nn.Dropout(dropout)
 
-    def forward(self, *inputs):
-        # [Modalities], [masks], batch_size
-        assert len(inputs) == self.num_modals + self.num_msk_modals + 1
+    def forward(self,
+                inputs: dict[str, Tensor],
+                masks: dict[str, Tensor],
+                batch_size: int):
 
-        modals_inp = inputs[:self.num_modals]
-        modals_inp_msks = inputs[self.num_modals:-1]
-        batch_size = inputs[-1]
+        # ----- Unimodal Feature Extraction ----- #
 
-        ### ----- Unimodal Feature Extraction ----- ###
+        embs_orig: dict[str, M3Care.EmbeddedTensor] = {}
+        emb_masks_orig: dict[str, M3Care.MaskTensor] = {}
+        embs: dict[str, M3Care.EmbeddedStaticTensor] = {}
+        emb_masks: dict[str, M3Care.MaskStaticTensor] = {}
+        for name, modal in self.modals.items():
+            emb_orig, emb_mask_orig, emb, emb_mask = \
+                self._unimodal_feat_extract(modal,
+                                            inputs[name],
+                                            batch_size,
+                                            masks[name] if modal.masked else None)
+            embs_orig[name], emb_masks_orig[name] = emb_orig, emb_mask_orig
+            embs[name], emb_masks[name] = emb, emb_mask
 
-        modal_embs_orig = []  # Each: Static -> B x Dmodel ; TS -> B x T x Dmodel
-        modal_msks_orig = []  # Each: Static -> B ; TS -> B x T
-        modal_embs = []  # Each: B x Dmodel
-        modal_msks = []  # Each: B x 1
+        # ----- Unimodal patient similarity matrices ----- #
+        sim_mats: dict[str, M3Care.BatchSimilarityTensor] = {}
+        sim_mat_masks: dict[str, M3Care.BatchSimilarityMaskTensor] = {}
 
-        for modal_idx in range(self.num_modals):
-            modal_emb: None | Tensor = None
-            modal_msk: None | Tensor = None
+        for name in self.modal_names:
+            sim_mats[name], sim_mat_masks[name] = \
+                self._calc_intramodal_similarities(name, embs[name], emb_masks[name])
 
-            modal_inp = modals_inp[modal_idx]
+        # ----- Stabilize learned representations --- #
 
-            # Determine embedded representation and its mask
-            if modal_idx in self.modal_msk_idxs:
-                modal_inp_msk = modals_inp_msks[self.modal_msk_idxs.index(
-                    modal_idx)]
-                modal_emb, modal_msk = self.unimodal_models[modal_idx](
-                    modal_inp, modal_inp_msk)
+        lstab = self._calc_stabilization(embs)
 
+        # ----- Filtered Similarity Matrix ----- #
+
+        filt_sim_mat = self._calc_filt_sim_mat(sim_mats, sim_mat_masks, batch_size)
+
+        # --- Calculate Aggregated Auxillary Information --- #
+
+        auxillaries = {name: self._calc_modal_auxillary(name,
+                                                        embs[name],
+                                                        filt_sim_mat)
+                       for name in self.modal_names}
+
+        # --- Adaptive Modality Imputation --- #
+
+        imputes = {name: self._adapative_imputation(name,
+                                                    embs[name],
+                                                    emb_masks[name],
+                                                    auxillaries[name])
+                   for name in self.modal_names}
+
+        for name, modal in self.modals.items():
+            embs[name] = imputes[name]
+            if modal.time_dim is None:
+                embs_orig[name] = imputes[name]
             else:
-                modal_emb = self.unimodal_models[modal_idx](modal_inp)
-                if modal_idx in self.modal_time_idxs:
-                    modal_msk = torch.ones(
-                        (batch_size, modal_emb.shape[1]), dtype=torch.bool, device=self.device)
-                else:
-                    modal_msk = torch.ones(
-                        (batch_size, 1), dtype=torch.bool, device=self.device)
+                embs_orig[name][:, 0, :] = imputes[name]
 
-            modal_embs_orig.append(modal_emb)
-            modal_msks_orig.append(modal_msk)
+        # --- Multimodal Interaction Capture --- #
 
-            # For time series ensure the first timestep is selected
-            if modal_idx in self.modal_time_idxs:
-                modal_embs.append(modal_emb[:, 0, :])
-                modal_msks.append(modal_msk[:, 0].unsqueeze(-1))
-            else:
-                modal_embs.append(modal_emb)
-                modal_msks.append(modal_msk)
+        for idx, (name, modal) in enumerate(self.modals.items()):
+            embs_orig[name] += self.modal_type_embeddings(
+                torch.IntTensor([idx]).to(self.device)
+            )
 
-        modal_msks = torch.stack(modal_msks)  # M x B x 1
+            if modal.time_dim is not None:
+                embs_orig[name] = self.pos_encode(embs_orig[name])
 
-        ### ----- Missing Modality Matrices ----- ###
+        # TODO: enforce ordering
+        # B x T(All) x D_model
+        z0 = torch.concat(
+            [(embs_orig[name].unsqueeze(1)
+             if modal.time_dim is None
+             else embs_orig[name])
+             for name, modal in self.modals.items()], dim=1)
 
-        modal_mask_mats = modal_msks * modal_msks.transpose(2, 1)  # M x B x B
+        # B x T(All) x 1
+        z_mask = torch.concat([emb_masks_orig[name] for name in self.modal_names],
+                              dim=1).unsqueeze(-1)
+        z_mask = z_mask * z_mask.transpose(-1, -2)  # B x T(All) x T(All)
+        zf = self.mm_tran(z0, z_mask)
+        zf_comb = zf.view(batch_size, -1)
+        print("ZF: ", zf.shape)
+        y_init = self.dropout(F.relu(self.output_fcs[0](zf_comb)))
+        print("YINIT: ", y_init.shape)
+        y_res = self.output_fcs[1](y_init).squeeze(-1)
+        return y_res, lstab
 
-        ### ----- Calculate Similarity between Modalities ----- ###
+    def _unimodal_feat_extract(self,
+                               modal: Modal,
+                               x: Tensor,
+                               batch_size: int,
+                               mask: Optional[Tensor] = None
+                               ) -> tuple[EmbeddedTensor,
+                                          MaskTensor,
+                                          EmbeddedStaticTensor,
+                                          MaskStaticTensor]:
+        """
+        Unimodal feature extraction.
 
-        sim_mats = []  # Each: B x B
+        Args:
+            modal (Modal): Modal involved.
+            x (Tensor): The input tensor.
+            batch_size (int): Batch size.
+            mask (Optional[Tensor], optional): The mask for the input tensor. Defaults
+                to None.
 
-        for modal_idx, modal_emb in enumerate(modal_embs):
-            sim_wgk = guassian_kernel(self.simi_bn(F.relu(self.simi_proj[modal_idx](modal_emb))),
-                                      kernel_mul=GK_MUL, kernel_num=GK_NUM)
-            sim_gk = guassian_kernel(self.simi_bn(modal_emb),
-                                     kernel_mul=GK_MUL, kernel_num=GK_NUM)
+        Returns:
+          tuple[EmbeddedTensor, MaskTensor, EmbeddedStaticTensor, MaskStaticTensor]:
+          1. (EmbeddedTensor): The originally embedded modality.
+          2. (MaskTensor): Mask describing the embedded modality.
+          3. (EmbeddedStaticTensor): The first position of the embedded modality.
+            If the modality is static then this is the same as the original embedding.
+          4. (MaskStaticTensor): Mask describing the first position of the embedded
+            modality.
+        """
 
-            sim_mat = ((1-F.sigmoid(self.simi_eps[modal_idx])) * sim_wgk +
-                       F.sigmoid(self.simi_eps[modal_idx])) * sim_gk
+        if modal.masked:
+            emb_orig, emb_mask_orig = modal.model(x, mask)
+        else:
+            emb_orig = modal.model(x)
+            emb_mask_orig = torch.ones(batch_size,
+                                       modal.time_dim
+                                       if modal.time_dim is not None
+                                       else 1,
+                                       dtype=torch.bool,
+                                       device=self.device)
 
-            sim_mat *= modal_mask_mats[modal_idx]
+        emb = emb_orig if modal.time_dim is None else emb_orig[:, 0, :]
+        emb_mask = \
+            emb_mask_orig[:, 0] if modal.time_dim is None else emb_mask_orig[:, 0]
 
-            sim_mats.append(sim_mat)
+        return emb_orig, emb_mask_orig, emb, emb_mask
 
-        sim_mats = torch.stack(sim_mats)  # M x B x B
+    def _calc_intramodal_similarities(self,
+                                      modal_name: str,
+                                      emb: EmbeddedStaticTensor,
+                                      emb_masks: MaskStaticTensor
+                                      ) -> tuple[BatchSimilarityTensor,
+                                                 BatchSimilarityMaskTensor]:
+        """
+        Calculates the similarities between each sample of the batch for a given
+        modality.
 
-        ### ----- Stabilize learned representations --- ###
+        Args:
+            modal_name (str): Name of the modality.
+            emb (EmbeddedStaticTensor): The embedded representations of each sample.
+            emb_masks (MaskStaticTensor): The masks for the embedded samples.
 
+        Returns:
+            BatchSimilarityTensor: A matrix describing the similarity between samples
+                for the modality. Similarity is 0 if one of the two involved samples
+                is missing.
+        """
+
+        emb_masks = emb_masks.unsqueeze(-1)
+        missing_mat = emb_masks * emb_masks.T
+
+        # Weighted gaussian similarity
+        sim_wgk = guassian_kernel(
+            self.simi_bn(
+                F.relu(
+                    self.simi_proj[modal_name](emb)
+                    )
+                ),
+            kernel_mul=M3Care.GK_MUL,
+            kernel_num=M3Care.GK_NUM)
+        # Regular gaussian similarity
+        sim_gk = guassian_kernel(
+            self.simi_bn(
+                F.relu(emb)
+                ),
+            kernel_mul=M3Care.GK_MUL,
+            kernel_num=M3Care.GK_NUM)
+
+        # Combine both gaussian similarities.
+        sim_mat = ((1 - F.sigmoid(self.simi_eps[modal_name])) * sim_wgk +
+                   F.sigmoid(self.simi_eps[modal_name])) * sim_gk
+
+        # Zero out missing samples.
+        sim_mat *= missing_mat
+
+        return sim_mat, missing_mat
+
+    def _calc_stabilization(self, embs: dict[str, EmbeddedStaticTensor]) -> Scalar:
         lstab = 0.0
 
-        for modal_idx, modal_emb in enumerate(modal_embs):
-            lstab += torch.abs(torch.norm(
-                self.simi_proj[modal_idx](modal_emb)) - torch.norm(modal_emb))
+        for modal_name, emb in embs.items():
+            lstab += torch.abs(
+                torch.norm(
+                    self.simi_proj[modal_name](emb) - torch.norm(emb)
+                )
+            )
 
-        ### ----- Filtered Similarity Matrix ----- ###
+        return lstab
 
-        agg_sim_mat = sim_mats.sum(dim=0) / modal_mask_mats.sum(dim=0)
-        agg_sim_mat *= agg_sim_mat > F.sigmoid(self.dissimilar_thresh)  # B x B
+    def _calc_filt_sim_mat(self,
+                           sim_mats: dict[str, BatchSimilarityTensor],
+                           sim_mat_masks: dict[str, BatchSimilarityMaskTensor],
+                           batch_size: int) -> BatchSimilarityTensor:
+        """
+        Calculate the filtered similarity matrix. This similarity matrix is the
+        aggregation of each modal's individual similarity matrix into a single matrix
+        describing each sample's similarity with other samples across multiple
+        modalities.
 
-        ### --- Calculate Aggregated Auxillary Information --- ###
+        Args:
+            sim_mats (dict[str, BatchSimilarityTensor]): A dictionary of each modals
+                similarity matrix.
+            sim_mat_masks (dict[str, BatchSimilarityMaskTensor]): A dictionary of each
+                modals similiarity matrix mask.
+            batch_size (int): Size of the batch.
 
-        modal_auxs = []  # Each: B x Dmodel
+        Returns:
+            BatchSimilarityTensor: A matrix describing the similarity between all
+                samples in the batch across multiple modalities.
+        """
 
-        for miss_idx, modal_idx in enumerate(self.modal_miss_idxs):
-            modal_aux = F.relu(self.graph_net[miss_idx][0](
-                agg_sim_mat, modal_embs[modal_idx]))
-            modal_aux = F.relu(
-                self.graph_net[miss_idx][1](agg_sim_mat, modal_aux))
+        filt_sim_mat = torch.zeros(batch_size, batch_size, dtype=torch.float32)
+        filt_sim_mat_mask = torch.zeros(batch_size, batch_size, dtype=torch.bool)
+        for sim_mat, sim_mat_mask in zip(sim_mats.values(), sim_mat_masks.values()):
+            filt_sim_mat += sim_mat
+            filt_sim_mat_mask += sim_mat_mask
 
-            modal_auxs.append(modal_aux)
+        filt_sim_mat /= filt_sim_mat_mask
+        filt_sim_mat *= filt_sim_mat > F.sigmoid(self.dissimilar_thresh)
 
-        ### --- Adaptive Modality Imputation --- ###
+        return filt_sim_mat
 
-        for miss_idx, modal_idx in enumerate(self.modal_miss_idxs):
-            modal_self_info = F.sigmoid(
-                self.adapt_self[miss_idx](modal_embs[modal_idx]))
-            modal_other_info = F.sigmoid(
-                self.adapt_self[miss_idx](modal_auxs[miss_idx]))
+    def _calc_modal_auxillary(self,
+                              modal_name: str,
+                              emb: EmbeddedStaticTensor,
+                              filt_sim_mat: BatchSimilarityTensor
+                              ) -> EmbeddedStaticTensor:
+        """
+        Calculate auxillary information using graph convolutions.
 
-            modal_self_info = modal_self_info / \
-                (modal_self_info + modal_other_info)
-            modal_other_info = 1 - modal_self_info
+        Args:
+            modal_name (str): Name of the modal.
+            emb (EmbeddedStaticTensor): Embedded modality.
+            filt_sim_mat (BatchSimilarityTensor): Filtered similarity matrix.
 
-            modal_impute = (
-                modal_self_info * modal_embs[modal_idx]) + (modal_other_info * modal_auxs[miss_idx])
-            modal_impute = (
-                modal_impute * modal_msks[modal_idx]) + (~modal_msks[modal_idx] * modal_auxs[miss_idx])
+        Returns:
+            BatchSimilarityTensor: Auxillary information to address missing modalities.
+        """
 
-            modal_embs[modal_idx] = modal_impute
+        return F.relu(
+            self.graph_net[modal_name](emb, filt_sim_mat)
+            )
 
-        for modal_idx in range(self.num_modals):
-            if modal_idx in self.modal_time_idxs:
-                modal_embs_orig[modal_idx][:, 0, :] = modal_embs[modal_idx]
-            else:
-                modal_embs_orig[modal_idx] = modal_embs[modal_idx].unsqueeze(1)
-                modal_msks_orig[modal_idx] = modal_msks_orig[modal_idx]
+    def _adapative_imputation(self,
+                              modal_name: str,
+                              emb: EmbeddedStaticTensor,
+                              mask: MaskStaticTensor,
+                              aux: EmbeddedStaticTensor) -> EmbeddedStaticTensor:
+        self_info = F.sigmoid(
+            self.adapt_self[modal_name](emb)
+        )
+        other_info = F.sigmoid(
+            self.adapt_other[modal_name](emb)
+        )
 
-        ### ----- Multimodal Interaction Capture ----- ###
+        self_info /= (self_info + other_info)
+        other_info = 1 - self_info
 
-        for modal_idx in range(self.num_modals):
-            modal_embs_orig[modal_idx] += self.modal_type_embeddings(
-                torch.IntTensor([modal_idx]).to(self.device))
+        mask = mask.unsqueeze(-1)
+        impute = (self_info * emb) + (other_info * aux)
+        impute = (mask * impute) + (~mask * aux)
 
-            if modal_idx in self.modal_time_idxs:
-                modal_embs_orig[modal_idx] = self.pos_encode(
-                    modal_embs_orig[modal_idx])
-
-        # modal_embs_orig: B x T x D_model
-
-        z0 = torch.concat(modal_embs_orig, dim=1)  # B x T(All) x D_model
-
-        z_mask = torch.concat(
-            modal_msks_orig, dim=1).unsqueeze(-1)  # B x T(All) x 1
-        z_mask = z_mask * z_mask.transpose(-1, -2)  # B x T(All) x T(All)
-
-        # B x H x T(All) x T(All)
-        z_mask0 = torch.concat([z_mask]*MM_TRAN_NHEADS[0], dim=1)
-        z_mask1 = torch.concat([z_mask]*MM_TRAN_NHEADS[1], dim=1)
-
-        # (B*H) x T(All) x T(All)
-        z_mask0 = z_mask0.view(-1, z_mask0.size(-1), z_mask0.size(-1))
-        z_mask1 = z_mask1.view(-1, z_mask1.size(-1), z_mask1.size(-1))
-
-        z1 = F.relu(self.mm_tran[0](z0, z_mask0))  # B x T(All) x Dmodel
-        z2 = F.relu(self.mm_tran[1](z1, z_mask1))  # B x T(All) x Dmodel
-
-        comb_fin = z2.view(batch_size, -1)  # B x (T(All) * Dmodel)
-
-        y_init = self.dropout(F.relu(self.output_fcs[0](comb_fin)))
-        y_res = self.output_fcs[1](y_init).squeeze(-1)
-
-        return y_res, lstab
+        return impute

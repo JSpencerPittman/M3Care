@@ -1,4 +1,4 @@
-from utils import (clones, init_weights, guassian_kernel)
+from mimic.utils import (clones, init_weights, guassian_kernel)
 from torch import nn
 from comp import GraphConvolution
 from synth import MultiModalTransformer

@@ -3,7 +3,7 @@ import numpy as np
 import math
 
 
-class KFoldDataLoader(object):
+class KFoldDatasetLoader(object):
     def __init__(self, dataset: Dataset, kfolds: int, batch_size: int, seed: int = 42):
         self.dataset = dataset
         self.m = len(dataset)
@@ -50,18 +50,28 @@ class KFoldDataLoader(object):
 
         return self.dataset[indices]
 
+    def next_fold(self) -> bool:
+        if self.end_fold():
+            return False
+
+        self.fold_idx += 1
+
+        self._initialize_fold_state()
+        return True
+
     def end(self):
         num_batches = self.train_num_batches if self.train_mode else self.val_num_batches
         return self.batch_idx == num_batches
 
-    def next_fold(self) -> bool:
+    def end_fold(self) -> bool:
         self.fold_idx = min(self.fold_idx + 1, self.kfolds)
 
         if self.fold_idx == self.kfolds:
             return False
 
+    def reset(self) -> bool:
+        self.fold_idx = 0
         self._initialize_fold_state()
-        return True
 
     def train(self):
         self.train_mode = True
@@ -83,7 +93,7 @@ class KFoldDataLoader(object):
         self.train_indices = np.concatenate(self.train_indices)
         self.val_indices = self.split_indices[self.fold_idx]
 
-        self.train_num_batches = math.ceil(
+        self.train_num_batches = math.floor(
             len(self.train_indices) / self.batch_size)
-        self.val_num_batches = math.ceil(
+        self.val_num_batches = math.floor(
             len(self.val_indices) / self.batch_size)

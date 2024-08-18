@@ -2,7 +2,7 @@ from torch import (nn, Tensor)
 import numpy as np
 import copy
 import torch
-from typing import List
+from typing import Optional, Sequence
 
 
 def clones(module, N):
@@ -48,34 +48,83 @@ def guassian_kernel(source, kernel_mul=2.0, kernel_num=1, fix_sigma=None):
     return sum(kernel_val)/len(kernel_val)
 
 
-def pad_axis(arr: np.array, fill_to: int, axis: int):
-    assert axis < arr.ndim
+def pad_axis(arr: np.array, pad_to: int, axis: int) -> np.ndarray:
+    """
+    Pad a numpy array to the pad_to value on the specified axis.
+    If the pad_to value is less than the size of the array, the data will be cutoff.
 
-    curr_dim = arr.shape[axis]
-    padding = [(0, 0)] * arr.ndim
-    padding[axis] = (0, fill_to-curr_dim)
-    return np.pad(arr, padding)
+    Args:
+        arr (np.array): Array to be padded.
+        pad_to (int): Pad to value.
+        axis (int): Axis to fill to on.
+
+    Returns:
+        np.ndarray: Array padded on specified axis.
+    """
+
+    padded_shape = tuple((pad_to if arr_axis == axis else dim)
+                         for arr_axis, dim in enumerate(arr.shape))
+    padded_arr = np.zeros_like(arr, shape=padded_shape)
+    slices = tuple(slice(0, dim, 1) for dim in arr.shape)
+    padded_arr[slices] = arr
+    return padded_arr
 
 
-def padded_stack(mat: List[np.array], fill_dims=None):
-    ndim = mat[0].ndim
+def pad_axes(arr: np.ndarray, pad_to: tuple[int]) -> np.ndarray:
+    """
+    Pad a numpy array to the pad_to values.
+    If the pad_to value is less than the size of the array, the data will be cutoff.
 
-    if fill_dims is None:
-        fill_dims = np.max([sub.shape for sub in mat], axis=0)
-    elif ndim == 1 and type(fill_dims) == int:
-        fill_dims = [fill_dims]
-    else:
-        max_dims = np.max([sub.shape for sub in mat], axis=0)
-        fill_dims = [mdim if dim == -1 else dim for mdim,
-                     dim in zip(max_dims, fill_dims)]
+    Args:
+        arr (np.array): Array to be padded.
+        pad_to (int): Dimensions to pad the array to.
 
-    padded_mats = []
-    for submat in mat:
-        padding = [(0, fill_to-dim)
-                   for dim, fill_to in zip(submat.shape, fill_dims)]
-        padded_mats.append(np.pad(submat, padding))
+    Returns:
+        np.ndarray: Array padded to match pad_to shape.
+    """
 
-    return np.array(padded_mats)
+    pad_to = tuple((dim if dim == -1 else pad_dim)
+                   for dim, pad_dim in zip(arr.shape, pad_to.shape))
+    padded_arr = np.zeros_like(arr, shape=pad_to)
+    slices = tuple(slice(0, dim, 1) for dim in arr.shape)
+    padded_arr[slices] = arr
+    return padded_arr
+
+
+def padded_stack(*arrs: np.ndarray, pad_to: Optional[tuple[int]] = None) -> np.ndarray:
+    """
+    Stack two numpy arrays. If the numpy arrays are inhomogenous then they will be
+    padded in each dimension until they match in shape. If a custom shape is wanted
+    then the pad_to argument can be used to enforce it, if any dimension in the pad_to
+    shape is smaller than one of the proviced arrays along that same dimension then the
+    array's data will be cutoff and not returned in the padded array. The pad_to shape
+    defines each arrays shape before the stack operation so the final shape would be
+    (number of arrays, *pad_to).
+
+    Args:
+        pad_to (Optional[tuple[int]], optional): Shape each subarray will be padded to.
+        Defaults to None.
+
+    Returns:
+        np.ndarray: The stack of all passed in arrays.
+    """
+
+    baseline = arrs[0]
+    assert all([arr.ndim == baseline.ndim for arr in arrs[1:]])
+
+    new_dims = np.max(np.array([arr.shape for arr in arrs]), axis=0)
+    if pad_to is not None:
+        assert len(pad_to) == baseline.ndim
+        new_dims = tuple((new_dim if pad_dim == -1 else pad_dim)
+                         for new_dim, pad_dim in zip(new_dims, pad_to))
+
+    new_dims = (len(arrs), *new_dims)
+    padded_arr = np.zeros_like(baseline, shape=new_dims)
+    for aidx, arr in enumerate(arrs):
+        slices = tuple([aidx] + [slice(0, dim, 1) for dim in arr.shape])
+        padded_arr[slices] = arr
+
+    return padded_arr
 
 
 def pad_missing(mat: np.array, mask: np.array):

@@ -1,77 +1,89 @@
-from torch.nn import functional as F
-from torch import (nn, Tensor)
-from general.util import clones
-import torch
 import math
+from typing import Sequence
+
+import torch
+from torch import Tensor
+from torch.nn import functional as F
+from torch import nn
+from torchtyping import TensorType
+
+EmbeddedStaticTensor = TensorType["batch_size", "embed_dim"]
+BatchSimilarityTensor = TensorType["batch_size", "batch_size"]
+MultiModalTensor = TensorType["batch_size", "seq_dim", "embed_dim"]
+MultiModalMaskTensor = TensorType["batch_size", "seq_dim", "seq_dim"]
 
 
 class GraphConvolution(nn.Module):
-    def __init__(self, in_features, out_features, bias=True):
-        super(GraphConvolution, self).__init__()
-        self.in_features = in_features
-        self.out_features = out_features
-        self.weight = nn.Parameter(torch.Tensor(
-            in_features, out_features).float())
-        if bias:
-            self.bias = nn.Parameter(torch.Tensor(out_features).float())
-        else:
-            self.register_parameter('bias', None)
-        self.initialize_parameters()
+    """
+    Graph Convolution.
 
-    def initialize_parameters(self):
-        std = 1. / math.sqrt(self.weight.size(1))
-        self.weight.data.uniform_(-std, std)
-        if self.bias is not None:
-            self.bias.data.uniform_(-std, std)
+    This class is used to calcualte auxillary information for a certain modality for
+    each sample. This information can serve as a replacement for the missing modality
+    or compliment any existent information.
 
-    def forward(self, adj, x):
-        y = torch.mm(x.float(), self.weight.float())
-        output = torch.mm(adj.float(), y.float())
-        if self.bias is not None:
-            return output + self.bias.float()
-        else:
-            return output
+    The graph is fully connected, however, the strength of the connection is
+    proportional to how similar two samples are. The stronger edges/connected nodes
+    carry a greater influence on the computed auxillary information for the modality.
+    """
 
+    def __init__(self, embedded_dim: int, bias: bool = True):
+        """
+        Constructor for graph convolution.
 
-class MultiModalTransformer(nn.Module):
-    def __init__(self, d_input: int, d_model: int, d_ff: int, num_heads: int, keep_prob=0.5):
-        super(MultiModalTransformer, self).__init__()
+        Args:
+            embedded_dim (int): The embedded dimension.
+            bias (bool, optional): Add bias to the linear projections.
+                Defaults to True.
+        """
 
-        assert (d_model % num_heads == 0)
+        super().__init__()
 
-        # General parameters
-        self.d_input = d_input
-        self.d_model = d_model
-        self.num_heads = num_heads
+        self.linear_layers = nn.ModuleList([nn.Linear(embedded_dim,
+                                                      embedded_dim,
+                                                      bias=bias) for _ in range(2)])
 
-        # Layers
-        self.proj = nn.Linear(d_input, d_model)
-        self.pos_encode = PositionalEncoding(d_model, dropout=(1-keep_prob))
+    def forward(self,
+                emb: EmbeddedStaticTensor,
+                filt_sim_mat: BatchSimilarityTensor) -> EmbeddedStaticTensor:
+        """
+        Forward graph propagation.
 
-        self.norm = clones(nn.LayerNorm(d_model), 2)
-        tran_enc_lay = nn.TransformerEncoderLayer(
-            d_model, num_heads, d_ff, (1-keep_prob), batch_first=True)
-        self.tran_enc = nn.TransformerEncoder(
-            tran_enc_lay, 1, norm=self.norm[0])
+        Args:
+            emb (EmbeddedStaticTensor): The embedded representation of the modality for
+                each sample.
+            filt_sim_mat (BatchSimilarityTensor): The similarity matrix between samples
+                across all modalities.
 
-        self.dropout = nn.Dropout(1-keep_prob)
-        self.pos_ff = PositionwiseFeedForward(
-            d_model, d_ff, dropout=(1-keep_prob))
+        Returns:
+            EmbeddedStaticTensor: Computed auxillary information.
+        """
 
-    def forward(self, x: Tensor, mask: Tensor):
-        # X: B x T x D_input
-        assert (x.size(-1) == self.d_input)
-
-        x = self.proj(x)  # B x T x D_model
-        x = self.pos_encode(x)
-        x = self.tran_enc(x, mask=~mask)
-        x = x + self.dropout(self.norm[1](self.pos_ff(x)))
-
-        return x
+        auxillary = F.relu(
+            self.linear_layers[0](filt_sim_mat @ emb)
+            )
+        auxillary = F.relu(
+            self.linear_layers[1](filt_sim_mat @ auxillary)
+        )
+        return auxillary
 
 
 class PositionalEncoding(nn.Module):
+    """
+    Positional encoder.
+
+    Encodes the sequential positions into the tensor.
+    """
+
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
+        """
+        Constructor for PositionalEncoding.
+
+        Args:
+            d_model (int): Dimensionality of the model.
+            dropout (float, optional): Dropout rate. Defaults to 0.1.
+            max_len (int, optional): Max length of the sequence. Defaults to 5000.
+        """
+
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
 
@@ -85,101 +97,54 @@ class PositionalEncoding(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         """
+        Add position information into sequence.
+
         Arguments:
-            x: Tensor, shape ``[batch_size, seq_len, embedding_dim]``
+            x Tensor: Sequential tensor of shape
+                (batch_size x seq_len x embedding_dim).
+
+        Returns:
+            Tensor: Positionally encoded tensor. 
         """
+
         x = x + self.pe[:, :x.size(1)]
         return self.dropout(x)
 
 
-class MultiHeadedAttention(nn.Module):
-    def __init__(self, h, d_model, dropout=0.1):
-        "Take in model size and number of heads."
-        super(MultiHeadedAttention, self).__init__()
-        assert d_model % h == 0
-        # We assume d_v always equals d_k
-        self.d_k = d_model // h
-        self.h = h
-        self.linears = clones(nn.Linear(d_model, d_model), 4)
-        self.attn = None
-        self.dropout = nn.Dropout(p=dropout)
+class MultiModalTransformer(nn.Module):
+    def __init__(self,
+                 embedded_dim: int,
+                 num_heads: Sequence[int],
+                 dropout: float = 0.1,
+                 max_len: int = 5000):
+        super().__init__()
 
-    def forward(self, query, key, value, mask=None):
-        "Implements Figure 2"
-        if mask is not None:
-            # Same mask applied to all h heads.
-            mask = mask.unsqueeze(1)
-            mask = mask.unsqueeze(-1)
-        nbatches = query.size(0)
+        self.pos_encode = PositionalEncoding(embedded_dim, dropout, max_len)
 
-        # 1) Do all the linear projections in batch from d_model => h x d_k
-        query, key, value = \
-            [l(x).view(nbatches, -1, self.h, self.d_k).transpose(1, 2)
-             for l, x in zip(self.linears, (query, key, value))]
+        self.num_trans = len(num_heads)
+        self.num_heads = num_heads
+        tran_enc_lays = [nn.TransformerEncoderLayer(d_model=embedded_dim,
+                                                    nhead=nhead,
+                                                    dim_feedforward=embedded_dim*4,
+                                                    dropout=dropout,
+                                                    activation='relu',
+                                                    batch_first=True)
+                         for nhead in num_heads]
+        self.norm = nn.ModuleList([nn.LayerNorm(embedded_dim)
+                                   for _ in range(self.num_trans)])
+        self.tran_encs = nn.ModuleList([nn.TransformerEncoder(tran_enc_lay,
+                                                              1,
+                                                              norm=self.norm[tran_idx])
+                                        for tran_idx, tran_enc_lay
+                                        in enumerate(tran_enc_lays)])
 
-        # 2) Apply attention on all the projected vectors in batch.
-        x, self.attn = attention_head(query, key, value, mask=mask,
-                                      dropout=self.dropout)
+    def forward(self,
+                mm: MultiModalTensor,
+                mask: MultiModalMaskTensor) -> MultiModalTensor:
+        mm = self.pos_encode(mm)
 
-        # 3) "Concat" using a view and apply a final linear.
-        x = x.transpose(1, 2).contiguous() \
-             .view(nbatches, -1, self.h * self.d_k)
-
-        return self.linears[-1](x)
-
-
-class SublayerConnection(nn.Module):
-    """
-    A residual connection followed by a layer norm.
-    Note for code simplicity the norm is first as opposed to last.
-    """
-
-    def __init__(self, size, dropout):
-        super(SublayerConnection, self).__init__()
-        self.norm = LayerNorm(size)
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, x, sublayer):
-        "Apply residual connection to any sublayer with the same size."
-        return x + self.dropout(sublayer(self.norm(x)))
-
-
-class PositionwiseFeedForward(nn.Module):
-    "Implements FFN equation."
-
-    def __init__(self, d_model, d_ff, dropout=0.1):
-        super(PositionwiseFeedForward, self).__init__()
-        self.w_1 = nn.Linear(d_model, d_ff)
-        self.w_2 = nn.Linear(d_ff, d_model)
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, x):
-        return self.w_2(self.dropout(F.relu(self.w_1(x))))
-
-
-class LayerNorm(nn.Module):
-    "Construct a layernorm module."
-
-    def __init__(self, features, eps=1e-6):
-        super(LayerNorm, self).__init__()
-        self.a_2 = nn.Parameter(torch.ones(features))
-        self.b_2 = nn.Parameter(torch.zeros(features))
-        self.eps = eps
-
-    def forward(self, x):
-        mean = x.mean(-1, keepdim=True)
-        std = x.std(-1, keepdim=True)
-        return self.a_2 * (x - mean) / (std + self.eps) + self.b_2
-
-
-def attention_head(query, key, value, mask=None, dropout=None):
-    "Compute 'Scaled Dot Product Attention'"
-    d_k = query.size(-1)
-    scores = torch.matmul(query, key.transpose(-2, -1)) \
-        / math.sqrt(d_k)
-    if mask is not None:
-        scores = scores.masked_fill(mask == 0, -1e9)
-    p_attn = F.softmax(scores, dim=-1)
-    if dropout is not None:
-        p_attn = dropout(p_attn)
-    return torch.matmul(p_attn, value), p_attn
+        for tran_idx in range(self.num_trans):
+            mask_scaled = (~mask).repeat_interleave(self.num_heads[tran_idx], dim=0) \
+                .float()
+            mm = self.tran_encs[tran_idx](mm, mask=mask_scaled)
+        return mm
