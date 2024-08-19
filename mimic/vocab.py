@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Self
+from typing import Self, overload
 
 
 class Vocab(object):
@@ -41,22 +41,52 @@ class Vocab(object):
         else:
             self.tok2cnt[token] += 1
 
-    def top_tokens(self, top: int) -> set[str]:
+    @overload
+    def top_tokens(self,
+                   top: int,
+                   ordered: bool = False,
+                   include_sep: bool = False) -> set[str]: ...
+
+    @overload
+    def top_tokens(self,
+                   top: int,
+                   ordered: bool = True,
+                   include_sep: bool = False) -> tuple[str]: ...
+
+    def top_tokens(self,
+                   top: int,
+                   ordered: bool = False,
+                   include_sep: bool = False) -> tuple[str] | set[str]:
         """
         Grab the `top` highest count tokens recorded in this vocab.
 
         Args:
-            top (int): Number of tokens to return/
+            top (int): Number of tokens to return.
+            ordered (bool): Return the tokens in order of highest to lowest counts.
+                If ordered a tuple is returned, for unordered a set is returned.
+                Defaults to False.
+            include_sep (bool): Include the separator token in the top tokens. Defaults
+                to False.
 
         Returns:
-            set[str]: A set of the `top` highest count tokens.
+            tuple[str] | set[str]: The tuple/set for the top tokens.
         """
 
-        return set([tok
-                    for _, tok in
-                    sorted(list({v: k for k, v in self.tok2cnt.items()}.items()),
-                           reverse=True)
-                    [:top]])
+        # Grabs top+1 tokens in case the seperator is present and include_sep is false.
+        srt_by_cnt = [tok
+                      for tok, _ in
+                      sorted(self.tok2cnt.items(),
+                             key=lambda item: item[1],
+                             reverse=True)][:top + (not include_sep)]
+
+        if not include_sep:
+            # Ensure there are `top` non-separator tokens.
+            if self.sep_token in srt_by_cnt:
+                srt_by_cnt.remove(include_sep)
+            else:
+                srt_by_cnt.pop()
+
+        return tuple(srt_by_cnt) if ordered else set(srt_by_cnt)
 
     def to_json(self, path: str | Path):
         """
