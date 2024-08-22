@@ -1,18 +1,17 @@
 from torchtyping import TensorType
 
-EmbeddedStaticTensor = TensorType["batch_size", "embed_dim"]
-EmbeddedSequentialTensor = TensorType["batch_size", "time_dim", "embed_dim"]
-EmbeddedTensor = EmbeddedStaticTensor | EmbeddedSequentialTensor
+BatTensor = TensorType["batch_size"]
 
-MaskStaticTensor = TensorType["batch_size"]
-MaskSequentialTensor = TensorType["batch_size", "time_dim"]
-MaskTensor = MaskStaticTensor | EmbeddedSequentialTensor
+BatEmbTensor = TensorType["batch_size", "embed_dim"]
 
-ModalsMaskTensor = TensorType["modal_num", "batch_size"]
-BatchSimilarityTensor = TensorType["batch_size", "batch_size"]
-BatchSimilarityMaskTensor = TensorType["batch_size", "batch_size"]
+BatSeqTensor = TensorType["batch_size", "seq_dim"]
+BatSeqEmbTensor = TensorType["batch_size", "seq_dim", "embed_dim"]
+BatSeqFeatTensor = TensorType["batch_size", "seq_dim", "feat_dim"]
 
-MultiModalTensor = TensorType["batch_size", "seq_dim", "embed_dim"]
-MultiModalMaskTensor = TensorType["batch_size", "seq_dim", "seq_dim"]
+BatTimeTensor = TensorType["batch_size", "time_dim"]
+BatTimeEmbTensor = TensorType["batch_size", "time_dim", "embed_dim"]
+BatTimeSeqTensor = TensorType["batch_size", "time_dim", "seq_dim"]
+
+BatBatTensor = TensorType["batch_size", "batch_size"]
 
 Scalar = TensorType[()]

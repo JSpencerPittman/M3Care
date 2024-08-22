@@ -5,7 +5,7 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
-from general import tensortypes as tt
+from m3care import tensortypes as tt
 
 
 class GraphConvolution(nn.Module):
@@ -38,8 +38,8 @@ class GraphConvolution(nn.Module):
                                                       bias=bias) for _ in range(2)])
 
     def forward(self,
-                emb: tt.EmbeddedStaticTensor,
-                filt_sim_mat: tt.BatchSimilarityTensor) -> tt.EmbeddedStaticTensor:
+                emb: tt.BatEmbTensor,
+                filt_sim_mat: tt.BatBatTensor) -> tt.BatEmbTensor:
         """
         Forward graph propagation.
 
@@ -134,8 +134,8 @@ class MultiModalTransformer(nn.Module):
                                         in enumerate(tran_enc_lays)])
 
     def forward(self,
-                mm: tt.MultiModalTensor,
-                mask: tt.MultiModalMaskTensor) -> tt.MultiModalTensor:
+                mm: tt.BatSeqEmbTensor,
+                mask: tt.BatSeqEmbTensor) -> tt.BatSeqEmbTensor:
         mm = self.pos_encode(mm)
 
         for tran_idx in range(self.num_trans):

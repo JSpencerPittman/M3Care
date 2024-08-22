@@ -5,10 +5,10 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
-from general import tensortypes as tt
-from general.model import (GraphConvolution, MultiModalTransformer,
-                           PositionalEncoding)
-from general.util import guassian_kernel, init_weights
+from m3care import tensortypes as tt
+from m3care.model import (GraphConvolution, MultiModalTransformer,
+                          PositionalEncoding)
+from m3care.util import guassian_kernel, init_weights
 
 
 @dataclass
@@ -88,10 +88,10 @@ class M3Care(nn.Module):
 
         # ----- Unimodal Feature Extraction ----- #
 
-        embs_orig: dict[str, tt.EmbeddedTensor] = {}
-        emb_masks_orig: dict[str, tt.MaskTensor] = {}
-        embs: dict[str, tt.EmbeddedStaticTensor] = {}
-        emb_masks: dict[str, tt.MaskStaticTensor] = {}
+        embs_orig: dict[str, tt.BatTimeEmbTensor] = {}
+        emb_masks_orig: dict[str, tt.BatTimeTensor] = {}
+        embs: dict[str, tt.BatEmbTensor] = {}
+        emb_masks: dict[str, tt.BatTensor] = {}
         for name, modal in self.modals.items():
             emb_orig, emb_mask_orig, emb, emb_mask = \
                 self._unimodal_feat_extract(modal,
@@ -102,8 +102,8 @@ class M3Care(nn.Module):
             embs[name], emb_masks[name] = emb, emb_mask
 
         # ----- Unimodal patient similarity matrices ----- #
-        sim_mats: dict[str, tt.BatchSimilarityTensor] = {}
-        sim_mat_masks: dict[str, tt.BatchSimilarityMaskTensor] = {}
+        sim_mats: dict[str, tt.BatBatTensor] = {}
+        sim_mat_masks: dict[str, tt.BatBatTensor] = {}
 
         for name in self.modal_names:
             sim_mats[name], sim_mat_masks[name] = \
@@ -134,10 +134,7 @@ class M3Care(nn.Module):
 
         for name, modal in self.modals.items():
             embs[name] = imputes[name]
-            if modal.time_dim is None:
-                embs_orig[name] = imputes[name]
-            else:
-                embs_orig[name][:, 0, :] = imputes[name]
+            embs_orig[name][:, 0, :] = imputes[name]
 
         # --- Multimodal Interaction Capture --- #
 
@@ -149,23 +146,18 @@ class M3Care(nn.Module):
             if modal.time_dim is not None:
                 embs_orig[name] = self.pos_encode(embs_orig[name])
 
-        # TODO: enforce ordering
         # B x T(All) x D_model
-        z0 = torch.concat(
-            [(embs_orig[name].unsqueeze(1)
-             if modal.time_dim is None
-             else embs_orig[name])
-             for name, modal in self.modals.items()], dim=1)
+        z0 = torch.concat([embs_orig[name] for name in self.modal_names], dim=1)
 
         # B x T(All) x 1
-        z_mask = torch.concat([emb_masks_orig[name] for name in self.modal_names],
-                              dim=1).unsqueeze(-1)
+        z_mask = torch.concat(
+            [emb_masks_orig[name] for name in self.modal_names], dim=1
+        ).unsqueeze(-1)
+
         z_mask = z_mask * z_mask.transpose(-1, -2)  # B x T(All) x T(All)
         zf = self.mm_tran(z0, z_mask)
         zf_comb = zf.view(batch_size, -1)
-        print("ZF: ", zf.shape)
         y_init = self.dropout(F.relu(self.output_fcs[0](zf_comb)))
-        print("YINIT: ", y_init.shape)
         y_res = self.output_fcs[1](y_init).squeeze(-1)
         return y_res, lstab
 
@@ -174,10 +166,10 @@ class M3Care(nn.Module):
                                x: Tensor,
                                batch_size: int,
                                mask: Optional[Tensor] = None
-                               ) -> tuple[tt.EmbeddedTensor,
-                                          tt.MaskTensor,
-                                          tt.EmbeddedStaticTensor,
-                                          tt.MaskStaticTensor]:
+                               ) -> tuple[tt.BatTimeEmbTensor,
+                                          tt.BatTimeTensor,
+                                          tt.BatEmbTensor,
+                                          tt.BatTensor]:
         """
         Unimodal feature extraction.
 
@@ -189,49 +181,49 @@ class M3Care(nn.Module):
                 to None.
 
         Returns:
-          tuple[EmbeddedTensor, MaskTensor, EmbeddedStaticTensor, MaskStaticTensor]:
-          1. (EmbeddedTensor): The originally embedded modality.
-          2. (MaskTensor): Mask describing the embedded modality.
-          3. (EmbeddedStaticTensor): The first position of the embedded modality.
+          tuple[BatTimeEmbTensor, BatTimeTensor, BatEmbTensor, BatTensor]:
+          1. (BatTimeEmbTensor): The originally embedded modality.
+          2. (BatTimeTensor): Mask describing the embedded modality.
+          3. (BatEmbTensor): The first position of the embedded modality.
             If the modality is static then this is the same as the original embedding.
-          4. (MaskStaticTensor): Mask describing the first position of the embedded
+          4. (BatTensor): Mask describing the first position of the embedded
             modality.
         """
 
         if modal.masked:
             emb_orig, emb_mask_orig = modal.model(x, mask)
+            if modal.time_dim is None:
+                emb_orig = emb_orig.unsqueeze(1)
+                emb_mask_orig = emb_mask_orig.unsqueeze(1)
         else:
-            emb_orig = modal.model(x)
-            emb_mask_orig = torch.ones(batch_size,
-                                       modal.time_dim
-                                       if modal.time_dim is not None
-                                       else 1,
+            emb_orig = modal.model(x).unsqueeze(1)
+            emb_mask_shape = (batch_size,
+                              1 if modal.time_dim is None else modal.time_dim)
+            emb_mask_orig = torch.ones(*emb_mask_shape,
                                        dtype=torch.bool,
                                        device=self.device)
-
-        emb = emb_orig if modal.time_dim is None else emb_orig[:, 0, :]
-        emb_mask = \
-            emb_mask_orig[:, 0] if modal.time_dim is None else emb_mask_orig[:, 0]
+        emb = emb_orig[:, 0, :]
+        emb_mask = emb_mask_orig[:, 0]
 
         return emb_orig, emb_mask_orig, emb, emb_mask
 
     def _calc_intramodal_similarities(self,
                                       modal_name: str,
-                                      emb: tt.EmbeddedStaticTensor,
-                                      emb_masks: tt.MaskStaticTensor
-                                      ) -> tuple[tt.BatchSimilarityTensor,
-                                                 tt.BatchSimilarityMaskTensor]:
+                                      emb: tt.BatEmbTensor,
+                                      emb_masks: tt.BatTensor
+                                      ) -> tuple[tt.BatBatTensor,
+                                                 tt.BatBatTensor]:
         """
         Calculates the similarities between each sample of the batch for a given
         modality.
 
         Args:
             modal_name (str): Name of the modality.
-            emb (EmbeddedStaticTensor): The embedded representations of each sample.
-            emb_masks (MaskStaticTensor): The masks for the embedded samples.
+            emb (BatEmbTensor): The embedded representations of each sample.
+            emb_masks (BatTensor): The masks for the embedded samples.
 
         Returns:
-            BatchSimilarityTensor: A matrix describing the similarity between samples
+            BatBatTensor: A matrix describing the similarity between samples
                 for the modality. Similarity is 0 if one of the two involved samples
                 is missing.
         """
@@ -266,7 +258,7 @@ class M3Care(nn.Module):
         return sim_mat, missing_mat
 
     def _calc_stabilization(self,
-                            embs: dict[str, tt.EmbeddedStaticTensor]) -> tt.Scalar:
+                            embs: dict[str, tt.BatEmbTensor]) -> tt.Scalar:
         lstab = 0.0
 
         for modal_name, emb in embs.items():
@@ -279,9 +271,9 @@ class M3Care(nn.Module):
         return lstab
 
     def _calc_filt_sim_mat(self,
-                           sim_mats: dict[str, tt.BatchSimilarityTensor],
-                           sim_mat_masks: dict[str, tt.BatchSimilarityMaskTensor],
-                           batch_size: int) -> tt.BatchSimilarityTensor:
+                           sim_mats: dict[str, tt.BatBatTensor],
+                           sim_mat_masks: dict[str, tt.BatBatTensor],
+                           batch_size: int) -> tt.BatBatTensor:
         """
         Calculate the filtered similarity matrix. This similarity matrix is the
         aggregation of each modal's individual similarity matrix into a single matrix
@@ -289,14 +281,14 @@ class M3Care(nn.Module):
         modalities.
 
         Args:
-            sim_mats (dict[str, BatchSimilarityTensor]): A dictionary of each modals
+            sim_mats (dict[str, BatBatTensor]): A dictionary of each modals
                 similarity matrix.
-            sim_mat_masks (dict[str, BatchSimilarityMaskTensor]): A dictionary of each
+            sim_mat_masks (dict[str, BatBatTensor]): A dictionary of each
                 modals similiarity matrix mask.
             batch_size (int): Size of the batch.
 
         Returns:
-            BatchSimilarityTensor: A matrix describing the similarity between all
+            BatBatTensor: A matrix describing the similarity between all
                 samples in the batch across multiple modalities.
         """
 
@@ -313,19 +305,19 @@ class M3Care(nn.Module):
 
     def _calc_modal_auxillary(self,
                               modal_name: str,
-                              emb: tt.EmbeddedStaticTensor,
-                              filt_sim_mat: tt.BatchSimilarityTensor
-                              ) -> tt.EmbeddedStaticTensor:
+                              emb: tt.BatEmbTensor,
+                              filt_sim_mat: tt.BatBatTensor
+                              ) -> tt.BatEmbTensor:
         """
         Calculate auxillary information using graph convolutions.
 
         Args:
             modal_name (str): Name of the modal.
-            emb (EmbeddedStaticTensor): Embedded modality.
-            filt_sim_mat (BatchSimilarityTensor): Filtered similarity matrix.
+            emb (BatEmbTensor): Embedded modality.
+            filt_sim_mat (BatBatTensor): Filtered similarity matrix.
 
         Returns:
-            BatchSimilarityTensor: Auxillary information to address missing modalities.
+            BatEmbTensor: Auxillary information to address missing modalities.
         """
 
         return F.relu(
@@ -334,9 +326,9 @@ class M3Care(nn.Module):
 
     def _adapative_imputation(self,
                               modal_name: str,
-                              emb: tt.EmbeddedStaticTensor,
-                              mask: tt.MaskStaticTensor,
-                              aux: tt.EmbeddedStaticTensor) -> tt.EmbeddedStaticTensor:
+                              emb: tt.BatEmbTensor,
+                              mask: tt.BatTensor,
+                              aux: tt.BatEmbTensor) -> tt.BatEmbTensor:
         self_info = F.sigmoid(
             self.adapt_self[modal_name](emb)
         )
