@@ -1,5 +1,7 @@
-# Venv
+# Development environment
 env/
+__pycache__/
+.vscode
 
 # Data
 odir_prep/
@@ -7,7 +9,6 @@ datasets/*/data
 
 # Jupyter
 .ipynb_checkpoints/
-__pycache__/
 
 # Trained models
 runs/
