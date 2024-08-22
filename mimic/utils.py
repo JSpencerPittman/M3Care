@@ -1,8 +1,8 @@
-from torch import (nn, Tensor)
+from torch import nn
 import numpy as np
 import copy
 import torch
-from typing import Optional, Sequence
+from typing import Optional
 
 
 def clones(module, N):

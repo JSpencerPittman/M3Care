@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Self, overload
+from typing import overload
 
 
 class Vocab(object):
@@ -82,7 +82,7 @@ class Vocab(object):
         if not include_sep:
             # Ensure there are `top` non-separator tokens.
             if self.sep_token in srt_by_cnt:
-                srt_by_cnt.remove(include_sep)
+                srt_by_cnt.remove(self.sep_token)
             else:
                 srt_by_cnt.pop()
 
@@ -100,14 +100,15 @@ class Vocab(object):
             'tok2id': self.tok2id,
             'id2tok': self.id2tok,
             'tok2cnt': self.tok2cnt,
-            'cnt': self.cnt
+            'cnt': self.cnt,
+            'sep_token': self.sep_token,
         }
 
         with open(str(path), 'w', encoding='utf-8') as f:
             json.dump(vocab_data, f, indent=4)
 
     @classmethod
-    def from_json(cls, path: str | Path) -> Self:
+    def from_json(cls, path: str | Path):
         """
         Construct a Vocab object from a JSON file.
 
@@ -126,6 +127,7 @@ class Vocab(object):
         v.id2tok = {int(k): v for k, v in vocab_data['id2tok'].items()}
         v.tok2cnt = {k: int(v) for k, v in vocab_data['tok2cnt'].items()}
         v.cnt = vocab_data['cnt']
+        v.sep_token = vocab_data['sep_token']
 
         return v
 
