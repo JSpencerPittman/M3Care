@@ -5,17 +5,14 @@ import numpy as np
 
 from mimic.datasets.modal_dataset import ModalDataset
 from mimic.utils import padded_stack
-from mimic.vocab import Vocab
 
 
 class TSNotesDataset(ModalDataset):
     def __init__(self,
                  data_path: Path | str,
                  pat_ids: tuple[int],
-                 vocab: Vocab,
                  time_dim: int):
         super().__init__(data_path, pat_ids)
-        self.vocab = vocab
         self.time_dim = time_dim
 
         with h5py.File(self.data_path, 'r') as f:
@@ -73,13 +70,11 @@ class TSNotesDataset(ModalDataset):
 
         notes, times = [], []
 
-        # group_key = 'group_<group-idx>_time_<time>'
-        # Sort keys by group index.
-        group_keys = sorted(group.keys(),
-                            key=lambda key: int(key.split('_')[1]))
-        for group_key in group_keys:
-            notes.append(group[group_key][:])
-            times.append(int(group_key.split('_')[-1]))
+        # Sort keys by time.
+        keys = sorted(group.keys())
+        for key in keys:
+            notes.append(group[key][:])
+            times.append(int(key.split('_')[-1]))
 
         max_len = max(len(note) for note in notes)
         sample = np.zeros((self.time_dim, max_len))

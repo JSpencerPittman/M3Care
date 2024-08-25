@@ -5,13 +5,11 @@ import numpy as np
 
 from mimic.datasets.modal_dataset import ModalDataset
 from mimic.utils import padded_stack
-from mimic.vocab import Vocab
 
 
 class StaticNotesDataset(ModalDataset):
-    def __init__(self, data_path: Path | str, pat_ids: tuple[int], vocab: Vocab):
+    def __init__(self, data_path: Path | str, pat_ids: tuple[int]):
         super().__init__(data_path, pat_ids)
-        self.vocab = vocab
 
         with h5py.File(self.data_path, 'r') as f:
             self.existing_ids = set([int(k.split('_')[-1])
@@ -29,7 +27,7 @@ class StaticNotesDataset(ModalDataset):
 
         if pat_id in self.existing_ids:
             with h5py.File(self.data_path, 'r') as f:
-                batch = f[f'pat_id_{pat_id}'][:]
+                batch = f[f'pat_id_{pat_id}']['discharge'][:]
                 mask = np.ones(len(batch))
 
         return batch, mask
@@ -53,7 +51,7 @@ class StaticNotesDataset(ModalDataset):
             with h5py.File(self.data_path, 'r') as f:
                 for pat_id in pat_ids:
                     if pat_id in matched_ids:
-                        batch.append(f[f'pat_id_{pat_id}'][:])
+                        batch.append(f[f'pat_id_{pat_id}']['discharge'][:])
                     else:
                         batch.append(np.zeros(0))
             seq_lens = tuple(len(sample) for sample in batch)

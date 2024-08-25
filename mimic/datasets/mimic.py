@@ -12,7 +12,6 @@ from mimic.datasets.modal_dataset import ModalDataset
 from mimic.datasets.static_notes import StaticNotesDataset
 from mimic.datasets.ts_notes import TSNotesDataset
 from mimic.datasets.vitals import VitalsDataset
-from mimic.vocab import Vocab
 
 PathLike = Path | str
 VITALS_SEQ_LEN = 150
@@ -22,7 +21,6 @@ TS_NOTES_TIME_DIM = 128
 
 class AuxillaryPaths(TypedDict):
     pat_ids: Optional[PathLike]
-    vocab: Optional[PathLike]
 
 
 class DatasetPaths(TypedDict):
@@ -50,8 +48,8 @@ class MimicDataset(Dataset):
         "demographic": {'pat_ids'},
         "vitals": {'pat_ids'},
         "interventions": {'pat_ids'},
-        "static_notes": {'pat_ids', 'vocab'},
-        "ts_notes": {'pat_ids', 'vocab'}
+        "static_notes": {'pat_ids'},
+        "ts_notes": {'pat_ids'}
     }
 
     # Ordering of datasets
@@ -142,12 +140,10 @@ class MimicDataset(Dataset):
                                                            INTERVENTIONS_SEQ_LEN)
             case 'static_notes':
                 self.datasets[name] = StaticNotesDataset(self.dataset_paths[name],
-                                                         self.pat_ids,
-                                                         self.vocab)
+                                                         self.pat_ids)
             case 'ts_notes':
                 self.datasets[name] = TSNotesDataset(self.dataset_paths[name],
                                                      self.pat_ids,
-                                                     self.vocab,
                                                      TS_NOTES_TIME_DIM)
             case _:
                 raise RuntimeWarning(f"MimicDataset: Dataset {name} not supported.")
@@ -167,8 +163,6 @@ class MimicDataset(Dataset):
         match name:
             case 'pat_ids':
                 self.pat_ids = np.load(self.auxillary_paths[name])
-            case 'vocab':
-                self.vocab = Vocab.from_json(self.auxillary_paths[name])
             case _:
                 raise RuntimeWarning(f"MimicDataset: Auxillary {name} not supported.")
 
