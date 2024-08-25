@@ -12,6 +12,8 @@ from mimic.datasets.modal_dataset import ModalDataset
 from mimic.datasets.static_notes import StaticNotesDataset
 from mimic.datasets.ts_notes import TSNotesDataset
 from mimic.datasets.vitals import VitalsDataset
+from mimic.datasets.labels import LabelsDataset
+
 
 PathLike = Path | str
 VITALS_SEQ_LEN = 150
@@ -29,6 +31,7 @@ class DatasetPaths(TypedDict):
     interventions: Optional[PathLike]
     static_notes: Optional[PathLike]
     ts_notes: Optional[PathLike]
+    labels: Optional[PathLike]
 
 
 class MimicDataset(Dataset):
@@ -41,6 +44,7 @@ class MimicDataset(Dataset):
     - Interventions (Time-series)
     - Static Notes (Natural Language)
     - Time Series Notes (Time-series & Natural Language)
+    - Labels (Tabular)
     """
 
     # Each dataset requires specific auxillaries to accompany it.
@@ -49,7 +53,8 @@ class MimicDataset(Dataset):
         "vitals": {'pat_ids'},
         "interventions": {'pat_ids'},
         "static_notes": {'pat_ids'},
-        "ts_notes": {'pat_ids'}
+        "ts_notes": {'pat_ids'},
+        "labels": {"pat_ids"}
     }
 
     # Ordering of datasets
@@ -57,7 +62,8 @@ class MimicDataset(Dataset):
                      'vitals',
                      'interventions',
                      'static_notes',
-                     'ts_notes')
+                     'ts_notes',
+                     'labels')
 
     def __init__(self,
                  dataset_paths: DatasetPaths,
@@ -145,6 +151,9 @@ class MimicDataset(Dataset):
                 self.datasets[name] = TSNotesDataset(self.dataset_paths[name],
                                                      self.pat_ids,
                                                      TS_NOTES_TIME_DIM)
+            case 'labels':
+                self.datasets[name] = LabelsDataset(self.dataset_paths[name],
+                                                    self.pat_ids)
             case _:
                 raise RuntimeWarning(f"MimicDataset: Dataset {name} not supported.")
 
