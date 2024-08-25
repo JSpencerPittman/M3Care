@@ -1,4 +1,5 @@
 from torch import nn, Tensor
+from typing import Optional
 
 
 class MLP(nn.Module):
@@ -38,6 +39,11 @@ class MLP(nn.Module):
             if norm:
                 self.model.append(nn.BatchNorm1d(lay_out))
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, mask: Optional[Tensor] = None) -> Tensor:
         # X: I -> O
-        return self.model(x)
+        x = self.model(x)
+        if mask is None:
+            return x
+
+        x *= mask.unsqueeze(-1)
+        return x, mask

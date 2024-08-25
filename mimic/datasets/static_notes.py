@@ -28,7 +28,7 @@ class StaticNotesDataset(ModalDataset):
         if pat_id in self.existing_ids:
             with h5py.File(self.data_path, 'r') as f:
                 batch = f[f'pat_id_{pat_id}']['discharge'][:]
-                mask = np.ones(len(batch))
+                mask = np.ones(1)
 
         return batch, mask
 
@@ -54,17 +54,14 @@ class StaticNotesDataset(ModalDataset):
                         batch.append(f[f'pat_id_{pat_id}']['discharge'][:])
                     else:
                         batch.append(np.zeros(0))
-            seq_lens = tuple(len(sample) for sample in batch)
             batch = padded_stack(*batch)
 
             # Construct mask
-            mask = np.zeros_like(batch)
-            for idx, seq_len in enumerate(seq_lens):
-                mask[idx, :seq_len] = 1
+            mask = ((batch != 0).sum(axis=1) > 0).astype(np.float64)
 
         else:
             # No matches
             batch = np.zeros((batch_size, 1))
-            mask = np.zeros((batch_size, 1))
+            mask = np.zeros(batch_size)
 
         return batch, mask
