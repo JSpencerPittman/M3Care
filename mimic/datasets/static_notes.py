@@ -18,7 +18,7 @@ class StaticNotesDataset(ModalDataset):
     def _getitem_single(self, idx: int) -> tuple[np.ndarray, np.ndarray]:
         """
         Batch: sequence_length (S)
-        Mask: sequence_length (S)
+        Mask: sequence_length (1)
         """
 
         pat_id = self.pat_ids[idx]
@@ -35,7 +35,7 @@ class StaticNotesDataset(ModalDataset):
     def _getitem_multiple(self, idxs: slice) -> tuple[np.ndarray, np.ndarray]:
         """
         Batch: batch_size x sequence_length (B x S)
-        Mask: batch_size x sequence_length (B x S)
+        Mask: batch_size x sequence_length (B)
         """
 
         pat_ids = self.pat_ids[idxs]

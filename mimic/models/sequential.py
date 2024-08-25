@@ -1,4 +1,5 @@
 import math
+from typing import Optional
 
 import torch
 from torch import nn
@@ -59,7 +60,8 @@ class SequentialEmbedder(nn.Module):
                  embed_dim: int,
                  dropout: float = 0.1,
                  max_len: int = 5000,
-                 num_heads: int = 8):
+                 num_heads: int = 8,
+                 mlp_hidden: Optional[list[int]] = None):
         """
         Constructor for SequenceEmbedder.
 
@@ -73,8 +75,11 @@ class SequentialEmbedder(nn.Module):
 
         super().__init__()
 
+        if mlp_hidden is None:
+            mlp_hidden = [int((feat_dim+embed_dim)/2)]
+
         self.mlp = MLP(feat_dim,
-                       [int((feat_dim+embed_dim)/2)],
+                       mlp_hidden,
                        embed_dim,
                        bias=True,
                        relu=True)

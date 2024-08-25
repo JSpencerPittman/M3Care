@@ -22,7 +22,7 @@ class TSNotesDataset(ModalDataset):
     def _getitem_single(self, idx: int) -> tuple[np.ndarray, np.ndarray]:
         """
         Sample: time_dim x sequence_length (T x S)
-        Mask: time_dim x sequence_length (T x S)
+        Mask: time_dim (T)
         """
 
         pat_id = self.pat_ids[idx]
@@ -38,12 +38,12 @@ class TSNotesDataset(ModalDataset):
     def _getitem_multiple(self, idxs: slice) -> tuple[np.ndarray, np.ndarray]:
         """
         Sample: batch_size x time_dim x sequence_length (B x T x S)
-        Mask: batch_size x time_dim x sequence_length (B x T x S)
+        Mask: batch_size x time_dim x sequence_length (B x T)
         """
 
         pat_ids = self.pat_ids[idxs]
 
-        batch, mask, max_seq_len = [], [], 0
+        batch, mask = [], []
 
         for pat_id in pat_ids:
             if pat_id in self.existing_ids:
@@ -52,20 +52,19 @@ class TSNotesDataset(ModalDataset):
                         f[f'pat_id_{pat_id}'])
                     batch.append(sample)
                     mask.append(sample_mask)
-                    max_seq_len = max(max_seq_len, sample.shape[-1])
             else:
-                batch.append(np.zeros((0, 0)))
-                mask.append(np.zeros((0, 0)))
+                batch.append(np.zeros((self.time_dim, 1)))
+                mask.append(np.zeros(self.time_dim))
 
-        batch = padded_stack(*batch, pad_to=(-1, max_seq_len))
-        mask = padded_stack(*mask, pad_to=(-1, max_seq_len))
+        batch = padded_stack(*batch)
+        mask = np.stack(mask)
 
         return batch, mask
 
     def _h5_group_numpy_parse(self, group: h5py.Group):
         """
         Sample: time_dim x sequence_length (T x S)
-        Mask: time_dim x sequence_length (T x S)
+        Mask: time_dim x sequence_length (T)
         """
 
         notes, times = [], []
@@ -76,12 +75,12 @@ class TSNotesDataset(ModalDataset):
             notes.append(group[key][:])
             times.append(int(key.split('_')[-1]))
 
-        max_len = max(len(note) for note in notes)
-        sample = np.zeros((self.time_dim, max_len))
-        mask = np.zeros_like(sample)
+        note_dim = notes[0].shape[-1]
+        sample = np.zeros((self.time_dim, note_dim))
+        mask = np.zeros(self.time_dim)
 
         for note, time in zip(notes, times):
-            sample[time, :len(note)] = note
-            mask[time, :len(note)] = 1
+            sample[time] = note
+            mask[time] = 1
 
         return sample, mask
