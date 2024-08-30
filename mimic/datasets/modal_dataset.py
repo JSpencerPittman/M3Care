@@ -21,10 +21,10 @@ class ModalDataset(ABC, Dataset):
     def __len__(self) -> int:
         return len(self.pat_ids)
 
-    def __getitem__(self, loc: int | slice) -> Batch:
+    def __getitem__(self, loc: int | slice | np.ndarray) -> Batch:
         if isinstance(loc, int):
             return self._getitem_single(loc)
-        elif isinstance(loc, slice):
+        elif isinstance(loc, slice) or isinstance(loc, np.ndarray):
             return self._getitem_multiple(loc)
         else:
             raise TypeError(
@@ -36,7 +36,7 @@ class ModalDataset(ABC, Dataset):
         pass
 
     @abstractmethod
-    def _getitem_multiple(self, idxs: slice) -> Batch:
+    def _getitem_multiple(self, idxs: slice | np.ndarray) -> Batch:
         pass
 
     def __str__(self) -> str:

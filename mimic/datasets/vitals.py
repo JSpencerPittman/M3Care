@@ -39,7 +39,8 @@ class VitalsDataset(ModalDataset):
 
         return batch, mask
 
-    def _getitem_multiple(self, idxs: slice) -> tuple[np.ndarray, np.ndarray]:
+    def _getitem_multiple(self, idxs: slice | np.ndarray
+                          ) -> tuple[np.ndarray, np.ndarray]:
         """
         Batch: batch_size x sequence_length x vital_features (B x S x E)
         Mask: batch_size x sequence_length (B x S)

@@ -23,6 +23,6 @@ class LabelsDataset(ModalDataset):
         pat_id = self.pat_ids[idx]
         return self.data.loc[pat_id].values.astype(np.float64)
 
-    def _getitem_multiple(self, idxs: slice) -> np.ndarray:
+    def _getitem_multiple(self, idxs: slice | np.ndarray) -> np.ndarray:
         pat_ids = self.pat_ids[idxs]
         return self.data.loc[pat_ids].values.astype(np.float64)

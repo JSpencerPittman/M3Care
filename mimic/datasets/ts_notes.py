@@ -35,7 +35,8 @@ class TSNotesDataset(ModalDataset):
 
         return batch, mask
 
-    def _getitem_multiple(self, idxs: slice) -> tuple[np.ndarray, np.ndarray]:
+    def _getitem_multiple(self, idxs: slice | np.ndarray
+                          ) -> tuple[np.ndarray, np.ndarray]:
         """
         Sample: batch_size x time_dim x sequence_length (B x T x S)
         Mask: batch_size x time_dim x sequence_length (B x T)
