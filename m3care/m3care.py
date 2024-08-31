@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from typing import Optional, Sequence
 
 import torch
@@ -11,12 +10,21 @@ from m3care.model import (GraphConvolution, MultiModalTransformer,
 from m3care.util import guassian_kernel, init_weights
 
 
-@dataclass
-class Modal(object):
-    name: str
-    model: Tensor
-    masked: bool = False
-    time_dim: Optional[int] = None
+class Modal(nn.Module):
+    def __init__(self,
+                 name: str,
+                 model: nn.Module,
+                 masked: bool = False,
+                 time_dim: Optional[int] = None):
+        super().__init__()
+
+        self.name = name
+        self.model = model
+        self.masked = masked
+        self.time_dim = time_dim
+
+    def forward(self, *args, **kwargs):
+        return self.model(*args, **kwargs)
 
 
 class M3Care(nn.Module):
@@ -32,34 +40,36 @@ class M3Care(nn.Module):
                  num_heads: Sequence[int] = [4, 1]):
         super().__init__()
 
-        self.modals = {modal.name: modal for modal in modals}
+        self.modals = nn.ModuleDict({modal.name: modal for modal in modals})
         self.modal_names = [modal.name for modal in modals]
         self.num_modals = len(modals)
         self.embedded_dim = embedded_dim
         self.device = device
 
         # Modality similarity calculation
-        self.simi_proj = {modal.name: nn.Sequential(
+        self.simi_proj = nn.ModuleDict({modal.name: nn.Sequential(
                 nn.Linear(embedded_dim, embedded_dim, bias=True),
                 nn.ReLU(),
                 nn.Linear(embedded_dim, embedded_dim, bias=True),
                 nn.ReLU(),
                 nn.Linear(embedded_dim, embedded_dim, bias=True))
-            for modal in modals}
+            for modal in modals})
         self.simi_bn = nn.BatchNorm1d(embedded_dim)
-        self.simi_eps = {modal.name: nn.Parameter(torch.ones(1)) for modal in modals}
+        self.simi_eps = nn.ParameterDict(
+            {modal.name: nn.Parameter(torch.ones(1)) for modal in modals})
 
         self.dissimilar_thresh = nn.Parameter(torch.ones((1))+1)
 
         # Modality Auxillary calculation
-        self.graph_net = {modal_name: GraphConvolution(embedded_dim, bias=True)
-                          for modal_name in self.modal_names}
+        self.graph_net = nn.ModuleDict(
+            {modal_name: GraphConvolution(embedded_dim, bias=True)
+             for modal_name in self.modal_names})
 
         # Adaptive modality imputation
-        self.adapt_self = {modal_name: nn.Linear(embedded_dim, 1)
-                           for modal_name in self.modal_names}
-        self.adapt_other = {modal_name: nn.Linear(embedded_dim, 1)
-                            for modal_name in self.modal_names}
+        self.adapt_self = nn.ModuleDict({modal_name: nn.Linear(embedded_dim, 1)
+                                         for modal_name in self.modal_names})
+        self.adapt_other = nn.ModuleDict({modal_name: nn.Linear(embedded_dim, 1)
+                                          for modal_name in self.modal_names})
 
         number_of_embeddings = sum([(1 if modal.time_dim is None else modal.time_dim)
                                    for modal in self.modals.values()])
@@ -131,23 +141,22 @@ class M3Care(nn.Module):
                                                     emb_masks[name],
                                                     auxillaries[name])
                    for name in self.modal_names}
-
-        for name, modal in self.modals.items():
-            embs[name] = imputes[name]
-            embs_orig[name][:, 0, :] = imputes[name]
+        imputes_orig = {name: torch.concatenate(
+            [imputes[name].unsqueeze(1), embs_orig[name][:, 1:, :]], dim=1)
+            for name in self.modal_names}
 
         # --- Multimodal Interaction Capture --- #
 
         for idx, (name, modal) in enumerate(self.modals.items()):
-            embs_orig[name] += self.modal_type_embeddings(
+            imputes_orig[name] = imputes_orig[name] + self.modal_type_embeddings(
                 torch.IntTensor([idx]).to(self.device)
             )
 
             if modal.time_dim is not None:
-                embs_orig[name] = self.pos_encode(embs_orig[name])
+                imputes_orig[name] = self.pos_encode(imputes_orig[name])
 
         # B x T(All) x D_model
-        z0 = torch.concat([embs_orig[name] for name in self.modal_names], dim=1)
+        z0 = torch.concat([imputes_orig[name] for name in self.modal_names], dim=1)
 
         # B x T(All) x 1
         z_mask = torch.concat(
@@ -253,7 +262,7 @@ class M3Care(nn.Module):
                    F.sigmoid(self.simi_eps[modal_name])) * sim_gk
 
         # Zero out missing samples.
-        sim_mat *= missing_mat
+        sim_mat = sim_mat * missing_mat
 
         return sim_mat, missing_mat
 
@@ -262,7 +271,7 @@ class M3Care(nn.Module):
         lstab = 0.0
 
         for modal_name, emb in embs.items():
-            lstab += torch.abs(
+            lstab = lstab + torch.abs(
                 torch.norm(
                     self.simi_proj[modal_name](emb) - torch.norm(emb)
                 )
@@ -292,14 +301,18 @@ class M3Care(nn.Module):
                 samples in the batch across multiple modalities.
         """
 
-        filt_sim_mat = torch.zeros(batch_size, batch_size, dtype=torch.float32)
-        filt_sim_mat_mask = torch.zeros(batch_size, batch_size, dtype=torch.bool)
+        filt_sim_mat = torch.zeros(batch_size,
+                                   batch_size,
+                                   dtype=torch.float32,
+                                   device=self.device)
+        filt_sim_mat_mask = torch.zeros_like(filt_sim_mat, dtype=torch.bool)
         for sim_mat, sim_mat_mask in zip(sim_mats.values(), sim_mat_masks.values()):
-            filt_sim_mat += sim_mat
-            filt_sim_mat_mask += sim_mat_mask
+            filt_sim_mat = filt_sim_mat + sim_mat
+            filt_sim_mat_mask = filt_sim_mat_mask + sim_mat_mask
 
-        filt_sim_mat /= filt_sim_mat_mask
-        filt_sim_mat *= filt_sim_mat > F.sigmoid(self.dissimilar_thresh)
+        filt_sim_mat = filt_sim_mat / filt_sim_mat_mask
+        filt_sim_mat = \
+            filt_sim_mat * (filt_sim_mat > F.sigmoid(self.dissimilar_thresh))
 
         return filt_sim_mat
 
@@ -336,8 +349,15 @@ class M3Care(nn.Module):
             self.adapt_other[modal_name](emb)
         )
 
-        self_info /= (self_info + other_info)
+        self_info = self_info / (self_info + other_info)
         other_info = 1 - self_info
+
+        def logGrad(lbl: str, v: Tensor):
+            print(f"{lbl} GRAD_FN ({v.grad_fn})\nCHILDREN: {[c[0] for c in v.grad_fn.next_functions]}\n{'-'*20}")
+        logGrad('SELF_INFO', self_info)
+        logGrad('EMB', emb)
+        logGrad('OTHER_INFO', other_info)
+        logGrad('AUX', aux)
 
         mask = mask.unsqueeze(-1)
         impute = (self_info * emb) + (other_info * aux)

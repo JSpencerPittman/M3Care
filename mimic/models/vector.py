@@ -45,5 +45,5 @@ class MLP(nn.Module):
         if mask is None:
             return x
 
-        x *= mask.unsqueeze(-1)
+        x = x * mask.unsqueeze(-1)
         return x, mask
