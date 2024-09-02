@@ -6,6 +6,8 @@ import numpy as np
 from mimic.datasets.modal_dataset import ModalDataset
 from mimic.utils import padded_stack
 
+BERT_EMBED_DIM = 782
+
 
 class TSNotesDataset(ModalDataset):
     def __init__(self,
@@ -27,7 +29,7 @@ class TSNotesDataset(ModalDataset):
 
         pat_id = self.pat_ids[idx]
 
-        batch, mask = np.zeros(1), np.zeros(1)
+        batch, mask = np.zeros(self.time_dim, BERT_EMBED_DIM), np.zeros(self.time_dim)
 
         if pat_id in self.existing_ids:
             with h5py.File(self.data_path, 'r') as f:
@@ -54,7 +56,7 @@ class TSNotesDataset(ModalDataset):
                     batch.append(sample)
                     mask.append(sample_mask)
             else:
-                batch.append(np.zeros((self.time_dim, 1)))
+                batch.append(np.zeros((self.time_dim, BERT_EMBED_DIM)))
                 mask.append(np.zeros(self.time_dim))
 
         batch = padded_stack(*batch)

@@ -118,20 +118,17 @@ class MultiModalTransformer(nn.Module):
 
         self.num_trans = len(num_heads)
         self.num_heads = num_heads
-        tran_enc_lays = [nn.TransformerEncoderLayer(d_model=embedded_dim,
-                                                    nhead=nhead,
-                                                    dim_feedforward=embedded_dim*4,
-                                                    dropout=dropout,
-                                                    activation='relu',
-                                                    batch_first=True)
-                         for nhead in num_heads]
+
         self.norm = nn.ModuleList([nn.LayerNorm(embedded_dim)
                                    for _ in range(self.num_trans)])
-        self.tran_encs = nn.ModuleList([nn.TransformerEncoder(tran_enc_lay,
-                                                              1,
-                                                              norm=self.norm[tran_idx])
-                                        for tran_idx, tran_enc_lay
-                                        in enumerate(tran_enc_lays)])
+        self.tran_enc_lays = nn.ModuleList(
+            [nn.TransformerEncoderLayer(d_model=embedded_dim,
+                                        nhead=nhead,
+                                        dim_feedforward=embedded_dim*4,
+                                        dropout=dropout,
+                                        activation='relu',
+                                        batch_first=True)
+             for nhead in num_heads])
 
     def forward(self,
                 mm: tt.BatSeqEmbTensor,
@@ -141,5 +138,6 @@ class MultiModalTransformer(nn.Module):
         for tran_idx in range(self.num_trans):
             mask_scaled = (~mask).repeat_interleave(self.num_heads[tran_idx], dim=0) \
                 .float()
-            mm = self.tran_encs[tran_idx](mm, mask=mask_scaled)
+            mm = self.tran_enc_lays[tran_idx](mm, src_mask=mask_scaled)
+            mm = self.norm[tran_idx](mm)
         return mm

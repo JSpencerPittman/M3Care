@@ -352,13 +352,6 @@ class M3Care(nn.Module):
         self_info = self_info / (self_info + other_info)
         other_info = 1 - self_info
 
-        def logGrad(lbl: str, v: Tensor):
-            print(f"{lbl} GRAD_FN ({v.grad_fn})\nCHILDREN: {[c[0] for c in v.grad_fn.next_functions]}\n{'-'*20}")
-        logGrad('SELF_INFO', self_info)
-        logGrad('EMB', emb)
-        logGrad('OTHER_INFO', other_info)
-        logGrad('AUX', aux)
-
         mask = mask.unsqueeze(-1)
         impute = (self_info * emb) + (other_info * aux)
         impute = (mask * impute) + (~mask * aux)

@@ -87,6 +87,17 @@ class KFoldDatasetLoader(object):
     def reset(self):
         self._init_round(0)
 
+    def num_train_batches(self) -> int:
+        count = 0
+        for fidx, fold_size in enumerate(self.fold_sizes):
+            if fidx == self.val_fold_idx:
+                continue
+            count += math.ceil(fold_size / self.batch_size)
+        return count
+
+    def num_val_batches(self) -> int:
+        return math.ceil(self.fold_sizes[self.val_fold_idx] / self.batch_size)
+
     def _init_round(self, val_fold_idx: int):
         """
         Initalize round. Each round is defined by the fold currently serving as the
