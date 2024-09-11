@@ -10,6 +10,7 @@ BatSeqFeatTensor = TensorType["batch_size", "seq_dim", "feat_dim"]
 
 BatTimeTensor = TensorType["batch_size", "time_dim"]
 BatTimeEmbTensor = TensorType["batch_size", "time_dim", "embed_dim"]
+BatTimeFeatTensor = TensorType["batch_size", "time_dim", "feat_dim"]
 BatTimeSeqTensor = TensorType["batch_size", "time_dim", "seq_dim"]
 
 BatBatTensor = TensorType["batch_size", "batch_size"]
