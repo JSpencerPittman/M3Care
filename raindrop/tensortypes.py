@@ -19,13 +19,27 @@ BatTimeSenTensor = TensorType["batch_size", "time_dim", "sensor_dim"]
 EdgeTimeObsTensor = TensorType["num_edges", "time_dim", "obs_dim"]
 TimeSenObsTensor = TensorType["time_dim", "num_sensors", "obs_dim"]
 
-BatSenTimeObs_Pe_EmbTensor = TensorType["batch_size",
-                                        "sensor_dim",
-                                        "time_dim",
-                                        "obs_pe_dim"]
+BatHeadSenSenTensor = TensorType["batch_size", "num_heads", "sensor_dim", "sensor_dim"]
+BatHeadSenTimeTensor = TensorType["batch_size", "num_heads", "sensor_dim", "time_dim"]
 BatTimeSenObsTensor = TensorType["batch_size", "time_dim", "sensor_dim", "obs_dim"]
 BatTimeSenObs_EmbTensor = TensorType["batch_size",
                                      "time_dim",
                                      "sensor_dim",
                                      "obs_embed_dim"]
 BatTimeSenSenTensor = TensorType["batch_size", "time_dim", "sensor_dim", "sensor_dim"]
+
+BatHeadSenTimeObs_Pe_EmbTensor = TensorType["batch_size",
+                                            "head_dim",
+                                            "sensor_dim",
+                                            "time_dim",
+                                            "obs_pe_dim"]
+BatHeadTimeSenObs_EmbTensor = TensorType["batch_size",
+                                         "num_heads",
+                                         "time_dim",
+                                         "sensor_dim",
+                                         "obs_emb_dim"]
+BatHeadTimeSenSenTensor = TensorType["batch_size",
+                                     "num_heads",
+                                     "time_dim",
+                                     "sensor_dim",
+                                     "sensor_dim"]
