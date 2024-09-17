@@ -1,12 +1,12 @@
 import math
 from typing import Optional
+
 import torch
 from torch import nn
 from torch.nn import functional as F
 
 from raindrop import tensortypes as tt
 from raindrop.models import RaindropPositionalEncoder
-
 
 # MASK-> 1:Present, 0:Missing
 
@@ -72,7 +72,7 @@ class Raindrop(nn.Module):
         self.temp_attn_s_map = nn.Linear(timesteps, 1)
 
         # Sensor Embeddings
-        assert out_dim // num_heads == 0
+        assert out_dim % num_heads == 0
         self.sensor_embed_map = nn.Linear(obs_embed_dim + pe_emb_dim,
                                           out_dim // num_heads)
 
@@ -83,7 +83,7 @@ class Raindrop(nn.Module):
                 times: tt.BatTimeTensor,
                 mask: tt.BatTimeSenTensor):
         batch_size = x.shape[0]
-        h = self._embed_observation(x) * mask
+        h = self._embed_observation(x) * mask[:, None, :, :, None]
         pe = self.pos_encoder(times)
         adj = self._init_adj_graph(batch_size)
         prune_msk: Optional[tt.BatHeadSenSenTensor] = None
@@ -97,7 +97,7 @@ class Raindrop(nn.Module):
                     prune_msk = self._generate_prune_mask(adj)
                 adj *= prune_msk
 
-            h = self._propagate_message(h, alpha, adj)
+            h = self._propagate_message(h, alpha, adj, lay_idx)
 
         pe = pe[:, None, :, None, :].repeat(1, self.num_heads, 1, self.num_sensors, 1)
         H = torch.concat([h, pe], dim=-1).permute(0, 1, 3, 2, 4)
@@ -110,7 +110,7 @@ class Raindrop(nn.Module):
                            x: tt.BatTimeSenObsTensor
                            ) -> tt.BatHeadTimeSenObs_EmbTensor:
         h = F.relu(torch.einsum("ijkl,klm->ijkm", x, self.obs_emb_weights))
-        h = h.view(h.shape[:3], self.num_heads, self.obs_embed_dim)
+        h = h.view(*h.shape[:3], self.num_heads, self.obs_embed_dim)
         return h.permute(0, 3, 1, 2, 4)
 
     def _calc_inter_sensor_attention(self,
@@ -119,19 +119,19 @@ class Raindrop(nn.Module):
                                      lay_idx: int,
                                      ) -> tt.BatHeadTimeSenSenTensor:
         batch_size = h.shape[0]
-        pe = pe[:, None, :, None, :].repeats(1, self.num_heads, 1, self.num_sensors, 1)
+
+        pe = pe[:, None, :, None, :].repeat(1, self.num_heads, 1, self.num_sensors, 1)
         attn_weights = self.inter_sensor_attn_weights[lay_idx]
         attn_weights = attn_weights[None, :, None, :, :].repeat(batch_size,
                                                                 1,
                                                                 self.timesteps,
                                                                 1,
                                                                 1)
-        alpha = torch.concat([attn_weights, pe], dim=-1)
-        alpha = alpha.view(alpha.shape[:2], self.num_heads, self.head_dim)
-        alpha = alpha.permute(0, 3, 1, 2, 4)
+
+        alpha = torch.concat([attn_weights, pe], dim=-1).swapaxes(-1, -2)
         h = self.inter_sensor_proj_map(h)
 
-        alpha = h @ alpha.T
+        alpha = h @ alpha
         return F.relu(alpha)
 
     def _propagate_message(self,
@@ -141,7 +141,7 @@ class Raindrop(nn.Module):
                            lay_idx: int) -> tt.BatHeadTimeSenObs_EmbTensor:
         bidir = \
             (self.inter_sensor_bidir_weights[lay_idx] @
-             self.inter_sensor_bidir_weights[lay_idx].T)
+             self.inter_sensor_bidir_weights[lay_idx].swapaxes(-1, -2))
         bidir = bidir[None, :, None, :, :]
         adj = adj[:, :, None, :, :]
         final_inter_sensor_weights = bidir * alpha * adj
@@ -166,20 +166,21 @@ class Raindrop(nn.Module):
 
     def _generate_prune_mask(self, adj: tt.BatHeadSenSenTensor
                              ) -> tt.BatHeadSenSenTensor:
-        adj = adj.view(adj.shape[:2], self.num_sensors**2)
+        adj = adj.view(*adj.shape[:2], self.num_sensors**2)
         pruned_edges = math.floor(self.num_sensors**2 * (1-self.prune_rate))
         retain_idxs = torch.argsort(adj)[:, :, pruned_edges:]
         prune_msk = torch.zeros_like(adj).scatter(dim=2, index=retain_idxs, value=1)
-        return prune_msk.view(adj.shape[:2], self.num_sensors, self.num_sensors)
+        return prune_msk.view(*adj.shape[:2], self.num_sensors, self.num_sensors)
 
     def _calc_temporal_self_attention(self, H: tt.BatHeadSenTimeObs_Pe_EmbTensor
                                       ) -> tt.BatHeadSenTimeTensor:
         Q = self.temp_attn_query_map(H)
         K = self.temp_attn_key_map(H)
 
-        beta = (Q @ K.T) / torch.sqrt(self.obs_embed_dim + self.pe_emb_dim)
+        norm = math.sqrt(self.obs_embed_dim + self.pe_emb_dim)
+        beta = (Q @ K.swapaxes(-1, -2)) / norm
         beta = self.temp_attn_s_map(beta).squeeze()
-        return F.softmax(beta)
+        return F.softmax(beta, dim=-1)
 
     def _generate_sensor_embedding(self,
                                    H: tt.BatHeadSenTimeObs_Pe_EmbTensor,
@@ -187,7 +188,8 @@ class Raindrop(nn.Module):
                                    ) -> tt.BatSenOutTensor:
         batch_size = H.shape[0]
         out = self.sensor_embed_map((beta.unsqueeze(-1) * H).sum(3))
-        return out.permute(0, 2, 1, 3).view(batch_size, self.num_sensors, -1)
+        out = out.permute(0, 2, 1, 3)
+        return torch.reshape(out, (batch_size, self.num_sensors, self.out_dim))
 
     def _init_weights(self, init_range: float = 1e-10):
         nn.init.uniform_(self.obs_emb_weights, -init_range, init_range)

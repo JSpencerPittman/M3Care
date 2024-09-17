@@ -44,6 +44,5 @@ class RaindropPositionalEncoder(nn.Module):
             tt.BatSeqEmbTensor: Encoded timestamps.
         """
 
-        times = times.unsqueeze(-1)
         scaled_times = times.unsqueeze(-1) / self.timescales[None, None, :]
         return torch.concat([torch.sin(scaled_times), torch.cos(scaled_times)], dim=-1)
