@@ -1,9 +1,12 @@
+import math
+from typing import Optional
 import torch
 from torch import nn
 from torch.nn import functional as F
 
 from raindrop import tensortypes as tt
 from raindrop.models import RaindropPositionalEncoder
+
 
 # MASK-> 1:Present, 0:Missing
 
@@ -22,6 +25,7 @@ class Raindrop(nn.Module):
                  temporal_attn_dim: int = 12,
                  dropout: float = 0.3,
                  init_range: float = 1e-10,
+                 prune_rate: float = 0.5,
                  device: str = 'cpu',
                  temp_attn_dim: int = 10):
         super().__init__()
@@ -39,6 +43,7 @@ class Raindrop(nn.Module):
         self.temp_attn_dim = temporal_attn_dim
         self.dropout = nn.Dropout(dropout)
         self.init_range = init_range
+        self.prune_rate = prune_rate
         self.device = device
         self.temp_attn_dim = temp_attn_dim
 
@@ -71,7 +76,7 @@ class Raindrop(nn.Module):
         self.sensor_embed_map = nn.Linear(obs_embed_dim + pe_emb_dim,
                                           out_dim // num_heads)
 
-        # self._init_weights(init_range)
+        self._init_weights(init_range)
 
     def forward(self,
                 x: tt.BatTimeSenObsTensor,
@@ -80,13 +85,17 @@ class Raindrop(nn.Module):
         batch_size = x.shape[0]
         h = self._embed_observation(x) * mask
         pe = self.pos_encoder(times)
-        adj = self._init_adjacency_graph(batch_size)
+        adj = self._init_adj_graph(batch_size)
+        prune_msk: Optional[tt.BatHeadSenSenTensor] = None
 
         for lay_idx in range(self.num_layers):
             alpha = self._calc_inter_sensor_attention(h, pe, lay_idx)
 
             if lay_idx:
                 adj = self._calc_next_adj_graph_layer(adj, alpha, mask)
+                if prune_msk is None:
+                    prune_msk = self._generate_prune_mask(adj)
+                adj *= prune_msk
 
             h = self._propagate_message(h, alpha, adj)
 
@@ -140,7 +149,7 @@ class Raindrop(nn.Module):
         h_prop = h_prop.sum(4)
         return F.relu(h_prop)
 
-    def _init_adjacency_graph(self, batch_size: int) -> tt.BatHeadSenSenTensor:
+    def _init_adj_graph(self, batch_size: int) -> tt.BatHeadSenSenTensor:
         return torch.ones(batch_size,
                           self.num_heads,
                           self.num_sensors,
@@ -155,15 +164,19 @@ class Raindrop(nn.Module):
         mask = mask.sum(1)[:, None, :, None]
         return adj_prev * (alpha.sum(2) / mask)
 
+    def _generate_prune_mask(self, adj: tt.BatHeadSenSenTensor
+                             ) -> tt.BatHeadSenSenTensor:
+        adj = adj.view(adj.shape[:2], self.num_sensors**2)
+        pruned_edges = math.floor(self.num_sensors**2 * (1-self.prune_rate))
+        retain_idxs = torch.argsort(adj)[:, :, pruned_edges:]
+        prune_msk = torch.zeros_like(adj).scatter(dim=2, index=retain_idxs, value=1)
+        return prune_msk.view(adj.shape[:2], self.num_sensors, self.num_sensors)
+
     def _calc_temporal_self_attention(self, H: tt.BatHeadSenTimeObs_Pe_EmbTensor
                                       ) -> tt.BatHeadSenTimeTensor:
-        # (B, H, Se, T, dobs+dpe)
-
-        # (B, H, Se, T, dtemp)
         Q = self.temp_attn_query_map(H)
         K = self.temp_attn_key_map(H)
 
-        # (B, H, Se, T)
         beta = (Q @ K.T) / torch.sqrt(self.obs_embed_dim + self.pe_emb_dim)
         beta = self.temp_attn_s_map(beta).squeeze()
         return F.softmax(beta)
@@ -176,6 +189,7 @@ class Raindrop(nn.Module):
         out = self.sensor_embed_map((beta.unsqueeze(-1) * H).sum(3))
         return out.permute(0, 2, 1, 3).view(batch_size, self.num_sensors, -1)
 
-    # def _init_weights(self, init_range: float = 1e-10):
-    #     # Observation embedding
-    #     nn.init.uniform_(self.obs_emb_weights, -init_range, init_range)
+    def _init_weights(self, init_range: float = 1e-10):
+        nn.init.uniform_(self.obs_emb_weights, -init_range, init_range)
+        nn.init.uniform_(self.inter_sensor_attn_weights, -init_range, init_range)
+        nn.init.uniform_(self.inter_sensor_bidir_weights, -init_range, init_range)
