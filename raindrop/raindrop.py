@@ -88,6 +88,8 @@ class Raindrop(nn.Module):
         adj = self._init_adj_graph(batch_size)
         prune_msk: Optional[tt.BatHeadSenSenTensor] = None
 
+        adj_graph_sim = self._calc_adj_graph_sim(adj)
+
         for lay_idx in range(self.num_layers):
             alpha = self._calc_inter_sensor_attention(h, pe, lay_idx)
 
@@ -96,6 +98,7 @@ class Raindrop(nn.Module):
                 if prune_msk is None:
                     prune_msk = self._generate_prune_mask(adj)
                 adj *= prune_msk
+                adj_graph_sim += self._calc_adj_graph_sim(adj)
 
             h = self._propagate_message(h, alpha, adj, lay_idx)
 
@@ -104,7 +107,9 @@ class Raindrop(nn.Module):
 
         beta = self._calc_temporal_self_attention(H)
 
-        return self._generate_sensor_embedding(H, beta)
+        sens_emb = self._generate_sensor_embedding(H, beta)
+
+        return sens_emb, adj_graph_sim
 
     def _embed_observation(self,
                            x: tt.BatTimeSenObsTensor
@@ -171,6 +176,13 @@ class Raindrop(nn.Module):
         retain_idxs = torch.argsort(adj)[:, :, pruned_edges:]
         prune_msk = torch.zeros_like(adj).scatter(dim=2, index=retain_idxs, value=1)
         return prune_msk.view(*adj.shape[:2], self.num_sensors, self.num_sensors)
+
+    def _calc_adj_graph_sim(self, adj: tt.BatHeadSenSenTensor):
+        batch_size = adj.shape[0]
+        sim = torch.zeros()
+        for sample_idx in range(batch_size-1):
+            sim += ((adj[sample_idx] - adj[sample_idx+1:])**2).sum() / (batch_size-1)**2
+        return sim / self.num_sensors**2
 
     def _calc_temporal_self_attention(self, H: tt.BatHeadSenTimeObs_Pe_EmbTensor
                                       ) -> tt.BatHeadSenTimeTensor:
