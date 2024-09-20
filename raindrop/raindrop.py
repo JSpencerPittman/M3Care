@@ -177,9 +177,9 @@ class Raindrop(nn.Module):
         prune_msk = torch.zeros_like(adj).scatter(dim=2, index=retain_idxs, value=1)
         return prune_msk.view(*adj.shape[:2], self.num_sensors, self.num_sensors)
 
-    def _calc_adj_graph_sim(self, adj: tt.BatHeadSenSenTensor):
+    def _calc_adj_graph_sim(self, adj: tt.BatHeadSenSenTensor) -> float:
         batch_size = adj.shape[0]
-        sim = torch.zeros()
+        sim = 0.0
         for sample_idx in range(batch_size-1):
             sim += ((adj[sample_idx] - adj[sample_idx+1:])**2).sum() / (batch_size-1)**2
         return sim / self.num_sensors**2
