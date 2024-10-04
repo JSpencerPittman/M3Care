@@ -48,10 +48,10 @@ class Raindrop(nn.Module):
         # Observation Embedding
         assert obs_embed_dim % num_heads == 0
 
+        self.scale_inp_bn = nn.BatchNorm2d(timesteps)
         self.obs_emb_weights = nn.Parameter(
             torch.zeros(num_sensors, obs_dim, obs_embed_dim * num_heads)
             )
-        self.obs_emb_bn = nn.BatchNorm3d(num_heads)
         self.pos_encoder = RaindropPositionalEncoder(pe_emb_dim, device=device)
 
         # Inter-Sensor Attention
@@ -60,8 +60,6 @@ class Raindrop(nn.Module):
         )
         self.inter_sensor_proj_map = nn.Linear(self.obs_embed_dim,
                                                self.inter_sensor_attn_dim + pe_emb_dim)
-        self.inter_sensor_proj_bn = \
-            nn.BatchNorm3d(num_heads)
         self.inter_sensor_bidir_weights = nn.Parameter(
             torch.zeros(num_layers, num_heads, num_sensors, self.inter_sensor_attn_dim))
 
@@ -71,9 +69,12 @@ class Raindrop(nn.Module):
         self.temp_attn_key_map = nn.Linear(obs_embed_dim + pe_emb_dim,
                                            self.temp_attn_dim)
         self.temp_attn_s_map = nn.Linear(timesteps, 1)
+        self.temp_attn_softmax = nn.Softmax(dim=-1)
+        self.temp_attn_bn = nn.LayerNorm((num_sensors, timesteps))
 
         # Sensor Embeddings
         assert out_dim % num_heads == 0
+        self.sensor_embed_ln = nn.LayerNorm((num_sensors, out_dim // num_heads))
         self.sensor_embed_map = nn.Linear(obs_embed_dim + pe_emb_dim,
                                           out_dim // num_heads)
 
@@ -84,7 +85,7 @@ class Raindrop(nn.Module):
                 times: tt.BatTimeTensor,
                 mask: tt.BatTimeSenTensor):
         batch_size = x.shape[0]
-
+        x = self.scale_inp_bn(x)
         h = self._embed_observation(x) * mask[:, None, :, :, None]
         pe = self.pos_encoder(times)
         adj = self._init_adj_graph(batch_size)
@@ -121,7 +122,7 @@ class Raindrop(nn.Module):
                    self.num_heads,
                    self.obs_embed_dim
                    ).permute(0, 3, 1, 2, 4)
-        return self.obs_emb_bn(h)
+        return h
 
     def _calc_inter_sensor_attention(self,
                                      h: tt.BatHeadTimeSenObs_EmbTensor,
@@ -140,7 +141,6 @@ class Raindrop(nn.Module):
 
         alpha = torch.concat([attn_weights, pe], dim=-1).swapaxes(-1, -2)
         h = self.inter_sensor_proj_map(h)
-        h = self.inter_sensor_proj_bn(h)
 
         return F.leaky_relu(h @ alpha)
 
@@ -192,23 +192,27 @@ class Raindrop(nn.Module):
                                       ) -> tt.BatHeadSenTimeTensor:
         Q = self.temp_attn_query_map(H)
         K = self.temp_attn_key_map(H)
-
-        norm = math.sqrt(self.obs_embed_dim + self.pe_emb_dim)
-        beta = (Q @ K.swapaxes(-1, -2)) / norm
+        # norm = math.sqrt(self.obs_embed_dim + self.pe_emb_dim)
+        beta = (Q @ K.swapaxes(-1, -2))  # / norm
         beta = self.temp_attn_s_map(beta).squeeze(dim=-1)
-        return F.softmax(beta, dim=-1)
+        beta = self.temp_attn_bn(beta)
+        # return self.temp_attn_softmax(beta)
+        return beta
 
     def _generate_sensor_embedding(self,
                                    H: tt.BatHeadSenTimeObs_Pe_EmbTensor,
                                    beta: tt.BatHeadSenTimeTensor
                                    ) -> tt.BatSenOutTensor:
         batch_size = H.shape[0]
+
         out = F.leaky_relu((beta.unsqueeze(-1) * H).sum(3))
         out = F.leaky_relu(self.sensor_embed_map(out))
+        out = self.sensor_embed_ln(out)
         out = out.permute(0, 2, 1, 3)
+
         return torch.reshape(out, (batch_size, self.num_sensors, self.out_dim))
 
     def _init_weights(self):
-        nn.init.xavier_uniform_(self.obs_emb_weights)
-        nn.init.xavier_uniform_(self.inter_sensor_attn_weights)
-        nn.init.xavier_uniform_(self.inter_sensor_bidir_weights)
+        nn.init.kaiming_uniform_(self.obs_emb_weights)
+        nn.init.kaiming_uniform_(self.inter_sensor_attn_weights)
+        nn.init.kaiming_uniform_(self.inter_sensor_bidir_weights)

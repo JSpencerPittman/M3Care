@@ -1,47 +1,90 @@
 from itertools import product
 from typing import Optional
-
+from collections import namedtuple
 from util.grad_track import GradientTracker, SubmoduleGradientTracker
+from copy import copy
 
-ShrinkEntry = tuple[str, int, int, float]
+
+ShrinkEntry = namedtuple('ShrinkEntry', ['name', 'in_idx', 'out_idx', 'value'])
+ShrinkEntries = list[ShrinkEntry]
+
+
+class ShrinkTable(object):
+    def __init__(self):
+        self.table: list[ShrinkEntries] = []
+        self.num_steps: int = 0
+        self._sorted = False
+
+    def save_entry(self, step: int, entry: ShrinkEntry):
+        if self.num_steps <= step:
+            self.table += [[]] * ((step+1)-self.num_steps)
+            self.num_steps = step+1
+
+        self._sorted = False
+
+        self.table[step].append(entry)
+
+    def sort(self):
+        if self._sorted:
+            return
+
+        for step_idx, shrinks in enumerate(self.table):
+            self.table[step_idx] = sorted(shrinks,
+                                          key=lambda se: se.value,
+                                          reverse=True)
+
+        self._sorted = True
+
+    def top(self,
+            n: int = 1,
+            steps: Optional[int | slice] = None) -> list[ShrinkEntries]:
+        self.sort()
+        if isinstance(steps, int):
+            steps = slice(steps, steps+1)
+        elif steps is None:
+            steps = slice(0, self.num_steps)
+
+        filt = copy(self.table[slice(0, self.num_steps) if steps is None else steps]) 
+
+        for step_idx, shrinks in enumerate(filt):
+            filt[step_idx] = shrinks[:n]
+
+        return filt
+
+    def __iadd__(self, other):
+        for step_idx, shrink in enumerate(other.table):
+            if step_idx < self.num_steps:
+                self.table[step_idx] += shrink
+            else:
+                self.table.append(shrink)
+                self.num_steps += 1
+
+        self._sorted = False
+        return self
 
 
 class SubmoduleGradientShrinkage(object):
     def __init__(self, name: str, sub_gt: SubmoduleGradientTracker):
         self.name = name
-        self.shrinkage: dict[int, dict[int, float]] = {}  # Index(inp, out, step)
+        self.shrink = ShrinkTable()
 
-        for inp_idx, out_idx in product(range(sub_gt.num_inp), range(sub_gt.num_out)):
+        for in_idx, out_idx in product(range(sub_gt.num_inp), range(sub_gt.num_out)):
             # Do not calculate shrinkage on None entries
-            if sub_gt.in_grad_is_none[inp_idx] or sub_gt.out_grad_is_none[out_idx]:
+            if sub_gt.in_grad_is_none[in_idx] or sub_gt.out_grad_is_none[out_idx]:
                 continue
 
             # Calculate shrinkage (remember input comes AFTER output gradient)
             shrink = [g_out / g_in
                       for g_in, g_out
-                      in zip(sub_gt.grad_in_norms[inp_idx],
+                      in zip(sub_gt.grad_in_norms[in_idx],
                              sub_gt.grad_out_norms[out_idx],
                              strict=True)]
 
-            if inp_idx not in self.shrinkage:
-                self.shrinkage[inp_idx] = {out_idx: shrink}
-            else:
-                self.shrinkage[inp_idx][out_idx] = shrink
+            for step_idx, v in enumerate(shrink):
+                self.shrink.save_entry(step_idx, ShrinkEntry(name, in_idx, out_idx, v))
 
-    def grab(self, largest_only: bool = False) -> list[ShrinkEntry]:
-        aggregated: list[ShrinkEntry] = []
-
-        for inp_idx, v in self.shrinkage.items():
-            for out_idx, shrink in v.items():
-                aggregated.append((self.name, inp_idx, out_idx, shrink))
-
-        if largest_only:
-            sorted(aggregated,
-                   key=lambda se: se[-1],
-                   reverse=True)
-            return [aggregated[0]]
-        else:
-            return aggregated
+    def grab(self) -> ShrinkTable:
+        return self.shrink
 
 
 class GradientShrinkage(object):
@@ -51,19 +94,12 @@ class GradientShrinkage(object):
                            in gt.trackers.items()}
 
     def grab(self,
-             submodule_name: Optional[str] = None,
-             largest_per_submodule: bool = False,
-             sort_results: bool = False):
+             submodule_name: Optional[str] = None) -> ShrinkTable:
         if submodule_name is not None:
-            selection = self.shrinkages[submodule_name].grab(largest_per_submodule)
+            selection = self.shrinkages[submodule_name]
         else:
-            selection = []
+            selection = ShrinkTable()
             for sub_shrink in self.shrinkages.values():
-                selection += sub_shrink.grab(largest_per_submodule)
-
-        if sort_results:
-            selection = sorted(selection,
-                               key=lambda se: se[-1],
-                               reverse=True)
+                selection += sub_shrink.grab()
 
         return selection
