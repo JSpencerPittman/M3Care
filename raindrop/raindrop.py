@@ -5,7 +5,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from raindrop import tensortypes as tt
+from raindrop import tensortypes as tt  # type: ignore
 from raindrop.models import RaindropPositionalEncoder
 
 # MASK-> 1:Present, 0:Missing
@@ -80,6 +80,19 @@ class Raindrop(nn.Module):
 
         self._init_weights()
 
+        # Trackers
+        self.trackers = nn.ModuleDict({
+            'embed_observation': nn.Identity(),
+            'propagate_message': nn.Identity(),
+            'calc_next_adj_graph_layer': nn.Identity(),
+            'calc_inter_sensor_attention': nn.Identity(),
+            'generate_prune_mask': nn.Identity(),
+            'H': nn.Identity(),
+            'calc_adj_graph_sim': nn.Identity(),
+            'calc_temporal_self_attention': nn.Identity(),
+            'generate_sensor_embedding': nn.Identity()
+        })
+
     def forward(self,
                 x: tt.BatTimeSenObsTensor,
                 times: tt.BatTimeTensor,
@@ -92,25 +105,34 @@ class Raindrop(nn.Module):
         prune_msk: Optional[tt.BatHeadSenSenTensor] = None
 
         adj_graph_sim = self._calc_adj_graph_sim(adj)
+        adj_graph_sim = self.trackers['calc_adj_graph_sim'](adj)
 
         for lay_idx in range(self.num_layers):
             alpha = self._calc_inter_sensor_attention(h, pe, lay_idx)
+            alpha = self.trackers['calc_inter_sensor_attention'](alpha)
 
             if lay_idx:
                 adj = self._calc_next_adj_graph_layer(adj, alpha, mask)
+                adj = self.trackers['calc_next_adj_graph_layer'](adj)
                 if prune_msk is None:
                     prune_msk = self._generate_prune_mask(adj)
-                adj *= prune_msk
-                adj_graph_sim += self._calc_adj_graph_sim(adj)
+                    prune_msk = self.trackers['generate_prune_mask'](prune_msk)
+                adj = adj * prune_msk
+                adj_graph_sim = adj_graph_sim + self._calc_adj_graph_sim(adj)
+                adj_graph_sim = self.trackers['calc_adj_graph_sim'](adj_graph_sim)
 
             h = self._propagate_message(h, alpha, adj, lay_idx)
+            h = self.trackers['propagate_message'](h)
 
         pe = pe[:, None, :, None, :].repeat(1, self.num_heads, 1, self.num_sensors, 1)
         H = torch.concat([h, pe], dim=-1).permute(0, 1, 3, 2, 4)
+        H = self.trackers['H'](H)
 
         beta = self._calc_temporal_self_attention(H)
+        beta = self.trackers['calc_temporal_self_attention'](beta)
 
         sens_emb = self._generate_sensor_embedding(H, beta)
+        sens_emb = self.trackers['generate_sensor_embedding'](sens_emb)
 
         return sens_emb, adj_graph_sim
 
@@ -156,6 +178,7 @@ class Raindrop(nn.Module):
         adj = adj[:, :, None, :, :]
         final_inter_sensor_weights = F.leaky_relu(bidir * alpha * adj)
         h_prop = F.leaky_relu(h.unsqueeze(3) * final_inter_sensor_weights.unsqueeze(-1))
+
         return F.leaky_relu(h_prop.sum(4))
 
     def _init_adj_graph(self, batch_size: int) -> tt.BatHeadSenSenTensor:
@@ -185,18 +208,17 @@ class Raindrop(nn.Module):
         batch_size = adj.shape[0]
         sim = 0.0
         for sample_idx in range(batch_size-1):
-            sim += ((adj[sample_idx] - adj[sample_idx+1:])**2).sum() / (batch_size-1)**2
+            sim = sim + ((adj[sample_idx] - adj[sample_idx+1:])**2).sum() / (batch_size-1)**2
         return sim / self.num_sensors**2
 
     def _calc_temporal_self_attention(self, H: tt.BatHeadSenTimeObs_Pe_EmbTensor
                                       ) -> tt.BatHeadSenTimeTensor:
         Q = self.temp_attn_query_map(H)
         K = self.temp_attn_key_map(H)
-        # norm = math.sqrt(self.obs_embed_dim + self.pe_emb_dim)
-        beta = (Q @ K.swapaxes(-1, -2))  # / norm
+        norm = math.sqrt(self.obs_embed_dim + self.pe_emb_dim)
+        beta = (Q @ K.swapaxes(-1, -2)) / norm
         beta = self.temp_attn_s_map(beta).squeeze(dim=-1)
         beta = self.temp_attn_bn(beta)
-        # return self.temp_attn_softmax(beta)
         return beta
 
     def _generate_sensor_embedding(self,
