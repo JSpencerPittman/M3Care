@@ -1,7 +1,7 @@
 import torch
 from torch import nn, Tensor
 
-from m3care import tensortypes as tt
+from src import tensortypes as tt
 from mimic.models.sequential import SequentialEmbedder
 from mimic.vocab import Vocab
 

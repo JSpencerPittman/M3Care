@@ -5,7 +5,7 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
-from m3care import tensortypes as tt
+from src import tensortypes as tt
 
 
 class GraphConvolution(nn.Module):

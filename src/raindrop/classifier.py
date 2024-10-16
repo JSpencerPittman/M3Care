@@ -1,5 +1,9 @@
+import torch
 from torch import nn
-from raindrop import raindrop
+from torch.nn import functional as F
+
+from src.raindrop.raindrop import Raindrop
+
 
 class RaindropClassifier(nn.Module):
     def __init__(self,
@@ -33,9 +37,4 @@ class RaindropClassifier(nn.Module):
 
         emb = torch.concat([ts_emb, static_emb], dim=-1) 
         return F.softmax(self.cls(emb), dim=-1), reg_loss
-    
-rd_cls = RaindropClassifier(raindrop,
-                            static_dim=6,
-                            static_proj_dim=34,
-                            cls_hidden_dim=128,
-                            classes=2).to(device)
+

@@ -5,10 +5,10 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
-from m3care import tensortypes as tt
+from src import tensortypes as tt
 from m3care.model import (GraphConvolution, MultiModalTransformer,
                           PositionalEncoding)
-from m3care.util import guassian_kernel, init_weights
+from src.util import guassian_kernel, init_weights
 
 
 @dataclass

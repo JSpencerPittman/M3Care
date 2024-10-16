@@ -3,7 +3,7 @@ import math
 import torch
 from torch import nn
 
-from m3care import tensortypes as tt
+from src import tensortypes as tt
 from mimic.models.vector import MLP
 
 
