@@ -1,3 +1,4 @@
+# type: ignore
 from torchtyping import TensorType  # type: ignore
 
 # TimeEmbTensor = TensorType["time_dim", "embed_dim"]

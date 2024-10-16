@@ -14,7 +14,7 @@ from m3care.util import guassian_kernel, init_weights
 @dataclass
 class Modal(object):
     name: str
-    model: Tensor
+    model: nn.Module
     masked: bool = False
     time_dim: Optional[int] = None
 

@@ -5,7 +5,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from raindrop import tensortypes as tt
+from raindrop import tensortypes as tt  # type: ignore
 from raindrop.models import RaindropPositionalEncoder
 
 # MASK-> 1:Present, 0:Missing
@@ -70,7 +70,7 @@ class Raindrop(nn.Module):
                                            self.temp_attn_dim)
         self.temp_attn_s_map = nn.Linear(timesteps, 1)
         self.temp_attn_softmax = nn.Softmax(dim=-1)
-        self.temp_attn_bn = nn.LayerNorm((num_sensors, timesteps))
+        self.temp_attn_ln = nn.LayerNorm((num_sensors, timesteps))
 
         # Sensor Embeddings
         assert out_dim % num_heads == 0
@@ -83,7 +83,7 @@ class Raindrop(nn.Module):
     def forward(self,
                 x: tt.BatTimeSenObsTensor,
                 times: tt.BatTimeTensor,
-                mask: tt.BatTimeSenTensor):
+                mask: tt.BatTimeSenTensor) -> tuple[tt.BatSenOutTensor, float]:
         batch_size = x.shape[0]
         x = self.scale_inp_bn(x)
         h = self._embed_observation(x) * mask[:, None, :, :, None]
@@ -195,7 +195,7 @@ class Raindrop(nn.Module):
         # norm = math.sqrt(self.obs_embed_dim + self.pe_emb_dim)
         beta = (Q @ K.swapaxes(-1, -2))  # / norm
         beta = self.temp_attn_s_map(beta).squeeze(dim=-1)
-        beta = self.temp_attn_bn(beta)
+        beta = self.temp_attn_ln(beta)
         # return self.temp_attn_softmax(beta)
         return beta
 
