@@ -97,7 +97,7 @@ class GradientFlowAnalyzer(object):
              order: list[str | tuple[str, int, int]],
              steps: int | list[int]
              ) -> dict[int, Flow]:
-        flow: dict[int, list[(GradientFlowAnalyzer.StepType, float)]] = {}
+        flow: dict[int, GradientFlowAnalyzer.Flow] = {}
 
         if isinstance(steps, int):
             steps = [steps]
@@ -146,3 +146,21 @@ class GradientFlowAnalyzer(object):
             shrinkages.append((label, f"{(i[-1]/o[-1]):.3f}"))
 
         return shrinkages
+
+
+def pretty_flow(flow: GradientFlowAnalyzer.Flow):
+    result = ""
+    for idx, entry in enumerate(flow):
+        match entry[1]:
+            case GradientFlowAnalyzer.StepType.ModuleIn:
+                if idx <= 0 or flow[idx-1][1] != GradientFlowAnalyzer.StepType.ModuleOut:
+                    result += f"{entry[0]}(I): {entry[2]:e}\n"
+            case GradientFlowAnalyzer.StepType.ModuleOut:
+                if idx < len(flow) - 1 and flow[idx+1][1] == GradientFlowAnalyzer.StepType.ModuleIn:
+                    in_grad = flow[idx+1][2]
+                    result += f"{entry[0]}(O->I): {entry[2]:e} -> {in_grad:e}\n"
+                else:
+                    result += f"{entry[0]}(O): {entry[2]:e}\n"
+            case GradientFlowAnalyzer.StepType.Parameter:
+                result += f"{entry[0]}(P): {entry[2]:e}\n"
+    return result

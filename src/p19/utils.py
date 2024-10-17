@@ -30,7 +30,8 @@ def split_p19_data(ts_inputs,
                    times,
                    lengths,
                    labels,
-                   device):
+                   device,
+                   summary: bool = False):
     np.random.seed(42)
 
     num_samples = ts_inputs.shape[0]
@@ -75,5 +76,27 @@ def split_p19_data(ts_inputs,
                          test_static_inp,
                          test_lbls,
                          device)
+    
+    if summary:
+        names = ['Training', 'Validation', 'Testing']
+        s = "P19 Summary\n"
+
+        def prop(lbls: torch.Tensor) -> str:
+            pos = lbls.sum().item()
+            count = lbls.shape[0]
+            return f"{(100 * pos/count):.2f}%"
+
+        num_samples = f"\tTotal samples {len(ts_inputs)}\n"
+        class_props = f"\tClasses {prop(labels)} positive\n"
+
+        for lbl, name in zip([train_lbls, val_lbls, test_lbls],
+                             names):
+            num_samples += f"\t\t{name}: {lbl.shape[0]}\n"
+            class_props += f"\t\t{name}: {prop(lbl)}\n"
+
+        s += num_samples
+        s += class_props
+
+        print(s)
 
     return train_ds, val_ds, test_ds
