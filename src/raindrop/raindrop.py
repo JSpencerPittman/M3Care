@@ -5,8 +5,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from raindrop import tensortypes as tt  # type: ignore
-from raindrop.models import RaindropPositionalEncoder
+from src.raindrop import tensortypes as tt  # type: ignore
+from src.raindrop.models import RaindropPositionalEncoder
 
 # MASK-> 1:Present, 0:Missing
 

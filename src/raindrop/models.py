@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 
-from raindrop import tensortypes as tt
+from src.raindrop import tensortypes as tt
 
 
 class RaindropPositionalEncoder(nn.Module):
