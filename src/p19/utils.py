@@ -99,4 +99,4 @@ def split_p19_data(ts_inputs,
 
         print(s)
 
-    return train_ds, val_ds, test_ds
+    return (train_idxs, val_idxs, test_idxs), (train_ds, val_ds, test_ds)

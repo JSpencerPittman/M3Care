@@ -91,6 +91,8 @@ class Raindrop(nn.Module):
         adj = self._init_adj_graph(batch_size)
         prune_msk: Optional[tt.BatHeadSenSenTensor] = None
 
+        h = self.dropout(h)
+
         adj_graph_sim = self._calc_adj_graph_sim(adj)
 
         for lay_idx in range(self.num_layers):
