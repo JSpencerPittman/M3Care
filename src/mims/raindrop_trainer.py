@@ -98,7 +98,7 @@ def main():
         d_model = d_inp * d_ob
         nhid, nlayers, nhead, dropout = 2 * d_model, 2, 2, 0.2
         aggreg, MAX = 'mean', 100
-        n_runs, n_splits = 1, 5
+        n_splits = 5
 
         # Initialize arrays to store evaluation metrics for each split
         acc_arr = np.zeros(n_splits)
@@ -136,8 +136,6 @@ def main():
             Ptrain_tensor, Ptrain_static_tensor, Ptrain_time_tensor, ytrain_tensor = tensorize_normalize(Ptrain, ytrain, mf, stdf, ms, ss)
             Pval_tensor, Pval_static_tensor, Pval_time_tensor, yval_tensor = tensorize_normalize(Pval, yval, mf, stdf, ms, ss)
             Ptest_tensor, Ptest_static_tensor, Ptest_time_tensor, ytest_tensor = tensorize_normalize(Ptest, ytest, mf, stdf, ms, ss)
-
-            global_structure = torch.ones(d_inp, d_inp)
 
             # Randomly remove features from validation and test sets
             if missing_ratio > 0:
@@ -190,8 +188,7 @@ def main():
             num_batches = min(k_neg, k_pos)
 
             # Metrics to track AUROC, AUPRC, and general loss
-            best_val_auprc = best_val_auroc = 0.0
-            best_loss_val = 100.0
+            best_val_auroc = 0.0
             print('Stop epochs: %d, Batches/epoch: %d, Total batches: %d' %
                    (num_epochs, num_batches, num_epochs * num_batches))
 
