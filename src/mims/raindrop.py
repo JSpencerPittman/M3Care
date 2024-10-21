@@ -1,7 +1,7 @@
 from torch import nn
 from src.mims.pos_encoder import PositionalEncodingTF
 import torch
-from src.mims.obs_prop import Observation_progation
+from src.mims.obs_prop import ObservationProgation
 from torch_geometric.nn.inits import glorot
 from torch.nn import functional as F
 
@@ -20,51 +20,90 @@ class Raindrop(nn.Module):
         n_classes = number of classes 
     """
 
-    def __init__(self, d_inp=36, d_model=64, nhead=4, nhid=128, nlayers=2, dropout=0.3, max_len=215, d_static=9,
-                 MAX=100, perc=0.5, aggreg='mean', n_classes=2, global_structure=None, sensor_wise_mask=False, static=True):
+    def __init__(self,
+                 num_sensors: int = 36,
+                #  d_ob: int = 1,
+                #  d_ob_emb: int = 4,
+                #  d_pe: int = 16,
+                #  timesteps: int = 60,
+                 d_model=64,
+                 num_heads: int = 4,
+                 nhid=128, nlayers=2,
+                 dropout: float = 0.3,
+                 max_len: int = 215,
+                 d_static: int = 9,
+                 MAX=100, perc=0.5, aggreg='mean', n_classes=2, sensor_wise_mask=False,
+                 use_static: bool =True):
         super().__init__()
+
+        # TEMPORARY FILLERS
+        d_ob = 1
+        d_ob_emb = 4
+        d_pe = 16
+        timesteps = 60
+        # END
+
+        self.num_sensors = num_sensors
+        self.d_ob = d_ob
+        self.d_ob_emb = d_ob_emb
+        self.d_pe = d_pe
+        self.timesteps = timesteps
+        self.dropout = nn.Dropout(dropout)
+        self.d_static = d_static
+        self.use_static = use_static
+
+        # Time
+        self.pos_encoder = PositionalEncodingTF(d_pe, timesteps, MAX)
+
+        # Static
+        if use_static:
+            self.static_emb_map = nn.Linear(d_static, num_sensors)
+
+        # Adjacency matrix
+        self.global_structure = torch.ones(num_sensors, num_sensors)
+
+        # second dimension required for glorot initialization
+        self.R_u = nn.Parameter(torch.Tensor(1, self.num_sensors*self.d_ob_emb)).cuda()
+
+        ## BOUNDARY ##
+
         from torch.nn import TransformerEncoder, TransformerEncoderLayer
         self.model_type = 'Transformer'
 
-        self.global_structure = global_structure
+        self.global_structure = torch.ones(num_sensors, num_sensors)
         self.sensor_wise_mask = sensor_wise_mask
 
-        d_pe = 16
-        d_enc = d_inp
+        d_enc = num_sensors
 
-        self.d_inp = d_inp
         self.d_model = d_model
-        self.static = static
-        if self.static:
-            self.emb = nn.Linear(d_static, d_inp)
+       
+        # self.d_ob = int(d_model/num_sensors)
 
-        self.d_ob = int(d_model/d_inp)
-
-        self.encoder = nn.Linear(d_inp*self.d_ob, self.d_inp*self.d_ob)
-
-        self.pos_encoder = PositionalEncodingTF(d_pe, max_len, MAX)
+        self.encoder = nn.Linear(num_sensors*self.d_ob_emb, self.num_sensors*self.d_ob_emb)
 
         if self.sensor_wise_mask == True:
-            encoder_layers = TransformerEncoderLayer(self.d_inp*(self.d_ob+16), nhead, nhid, dropout)
+            encoder_layers = TransformerEncoderLayer(self.num_sensors*(self.d_ob_emb+16), num_heads, nhid, dropout)
         else:
-            encoder_layers = TransformerEncoderLayer(d_model+16, nhead, nhid, dropout)
+            encoder_layers = TransformerEncoderLayer(d_model+16, num_heads, nhid, dropout)
 
         self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
 
-        self.adj = torch.ones([self.d_inp, self.d_inp]).cuda()
+        self.adj = torch.ones([self.num_sensors, self.num_sensors]).cuda()
 
-        self.R_u = nn.Parameter(torch.Tensor(1, self.d_inp*self.d_ob)).cuda()
+        self.ob_propagation =  ObservationProgation(
+                                 d_feat=timesteps*self.d_ob_emb,
+                                 heads=1,
+                                 num_nodes=num_sensors)
 
-        self.ob_propagation = Observation_progation(in_channels=max_len*self.d_ob, out_channels=max_len*self.d_ob, heads=1,
-                                                    n_nodes=d_inp, ob_dim=self.d_ob)
+        self.ob_propagation_layer2 = ObservationProgation(
+                                        d_feat=timesteps*self.d_ob_emb,
+                                        heads=1,
+                                        num_nodes=num_sensors)
 
-        self.ob_propagation_layer2 = Observation_progation(in_channels=max_len*self.d_ob, out_channels=max_len*self.d_ob, heads=1,
-                                                           n_nodes=d_inp, ob_dim=self.d_ob)
-
-        if static == False:
+        if use_static == False:
             d_final = d_model + d_pe
         else:
-            d_final = d_model + d_pe + d_inp
+            d_final = d_model + d_pe + num_sensors
 
         self.mlp_static = nn.Sequential(
             nn.Linear(d_final, d_final),
@@ -80,97 +119,104 @@ class Raindrop(nn.Module):
 
         self.aggreg = aggreg
         self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(dropout)
+
         self.init_weights()
 
     def init_weights(self):
         initrange = 1e-10
         self.encoder.weight.data.uniform_(-initrange, initrange)
-        if self.static:
-            self.emb.weight.data.uniform_(-initrange, initrange)
+        if self.use_static:
+            self.static_emb_map.weight.data.uniform_(-initrange, initrange)
         glorot(self.R_u)
 
     def forward(self, src, static, times, lengths):
-        """Input to the model:
-        src = P: [215, 128, 36] : 36 nodes, 128 samples, each sample each channel has a feature with 215-D vector
-        static = Pstatic: [128, 9]: this one doesn't matter; static features
-        times = Ptime: [215, 128]: the timestamps
-        lengths = lengths: [128]: the number of nonzero recordings.
         """
-        maxlen, batch_size = src.shape[0], src.shape[1]
-        missing_mask = src[:, :, self.d_inp:int(2*self.d_inp)]
-        src = src[:, :, :int(src.shape[2]/2)]
-        n_sensor = self.d_inp
-
-        src = torch.repeat_interleave(src, self.d_ob, dim=-1)
-        h = F.relu(src*self.R_u)
+        src (T, B, Se, Obs)
+        """
+        # """Input to the model:
+        # src = P: [215, 128, 36] : 36 nodes, 128 samples, each sample each channel has a feature with 215-D vector
+        # static = Pstatic: [128, 9]: this one doesn't matter; static features
+        # times = Ptime: [215, 128]: the timestamps
+        # lengths = lengths: [128]: the number of nonzero recordings.
+        # """
+        
+        timesteps, batch_size = src.shape[:2]
+        
+        # Time embedding
         pe = self.pos_encoder(times)
-        if static is not None:
-            emb = self.emb(static)
 
+        # Static embedding
+        if static is not None:
+            emb = self.static_emb_map(static)
+
+        # Split mask from masked data
+        sensor_mask = src[:, :, self.num_sensors:]
+        x = src[:, :, :self.num_sensors]
+
+        x = torch.repeat_interleave(x, self.d_ob_emb, dim=-1)
+
+        h = F.relu(x*self.R_u)
         h = self.dropout(h)
 
-        mask = torch.arange(maxlen)[None, :] >= (lengths.cpu()[:, None])
-        mask = mask.squeeze(1).cuda()
+        # Mask describing time steps of samples with no sensor readings
+        time_mask = (torch.arange(timesteps)[None, :] >= (lengths.cpu()[:, None])).cuda()
 
-        step1 = True
-        x = h
-        if step1 == False:
-            output = x
-            distance = 0
-        elif step1 == True:
-            adj = self.global_structure.cuda()
-            adj[torch.eye(self.d_inp).byte()] = 1
+        # Initalize edges
+        adj = self.global_structure.cuda()
+        adj[torch.eye(self.num_sensors).byte()] = 1
+        edge_index = torch.nonzero(adj).T
+        edge_weights = adj[edge_index[0], edge_index[1]]
 
-            edge_index = torch.nonzero(adj).T
-            edge_weights = adj[edge_index[0], edge_index[1]]
+        # Initalize output (T, B, Se * D_ob_emb)
+        output = torch.zeros([timesteps, batch_size, self.num_sensors*self.d_ob_emb]).cuda()
 
-            batch_size = src.shape[1]
-            n_step = src.shape[0]
-            output = torch.zeros([n_step, batch_size, self.d_inp*self.d_ob]).cuda()
+        # Initialize attention weights (E, B)
+        alpha_all = torch.zeros([edge_index.shape[1],  batch_size]).cuda()
 
-            use_beta = False
-            if use_beta == True:
-                alpha_all = torch.zeros([int(edge_index.shape[1]/2), batch_size]).cuda()
-            else:
-                alpha_all = torch.zeros([edge_index.shape[1],  batch_size]).cuda()
-            for unit in range(0, batch_size):
-                stepdata = x[:, unit, :]
-                p_t = pe[:, unit, :]
+        for smp_idx in range(batch_size):
+            smp_h = h[:, smp_idx, :]
 
-                stepdata = stepdata.reshape([n_step, self.d_inp, self.d_ob]).permute(1, 0, 2)
-                stepdata = stepdata.reshape(self.d_inp, n_step*self.d_ob)
+            smp_h = smp_h.reshape([timesteps,
+                                   self.num_sensors,
+                                   self.d_ob_emb]).permute(1, 0, 2)
+            smp_h = smp_h.reshape(self.num_sensors, timesteps*self.d_ob_emb)
 
-                stepdata, attentionweights = self.ob_propagation(stepdata, p_t=p_t, edge_index=edge_index, edge_weights=edge_weights,
-                                 use_beta=use_beta,  edge_attr=None, return_attention_weights=True)
+            smp_h, (edge_index_layer2, alpha_layer2) = self.ob_propagation(smp_h,
+                                                      edge_index=edge_index,
+                                                      edge_weights=edge_weights,
+                                                      edge_attr=None,
+                                                      ret_attn_weights=True)
+        
+            alpha_layer2 = alpha_layer2.squeeze(-1)
 
-                edge_index_layer2 = attentionweights[0]
-                edge_weights_layer2 = attentionweights[1].squeeze(-1)
+            smp_h, (_, alpha_final) = self.ob_propagation_layer2(smp_h,
+                                                             edge_index=edge_index_layer2,
+                                                             edge_weights=alpha_layer2,
+                                                             edge_attr=None,
+                                                             ret_attn_weights=True)
 
-                stepdata, attentionweights = self.ob_propagation_layer2(stepdata, p_t=p_t, edge_index=edge_index_layer2, edge_weights=edge_weights_layer2,
-                                 use_beta=False,  edge_attr=None, return_attention_weights=True)
+            # Save propagated nodes and alphas
+            smp_h = smp_h.view([self.num_sensors, timesteps, self.d_ob_emb])
+            smp_h = smp_h.permute([1, 0, 2])
+            smp_h = smp_h.reshape([-1, self.num_sensors*self.d_ob_emb])
+            output[:, smp_idx, :] = smp_h
+            alpha_all[:, smp_idx] = alpha_final.squeeze(-1)
 
-                stepdata = stepdata.view([self.d_inp, n_step, self.d_ob])
-                stepdata = stepdata.permute([1, 0, 2])
-                stepdata = stepdata.reshape([-1, self.d_inp*self.d_ob])
+        distance = torch.cdist(alpha_all.T, alpha_all.T, p=2)
+        distance = torch.mean(distance)
 
-                output[:, unit, :] = stepdata
-                alpha_all[:, unit] = attentionweights[1].squeeze(-1)
-
-            distance = torch.cdist(alpha_all.T, alpha_all.T, p=2)
-            distance = torch.mean(distance)
-
-        if self.sensor_wise_mask == True:
-            extend_output = output.view(-1, batch_size, self.d_inp, self.d_ob)
-            extended_pe = pe.unsqueeze(2).repeat([1, 1, self.d_inp, 1])
+        # Give each sensor its own positional encoding
+        if self.sensor_wise_mask:
+            extend_output = output.view(-1, batch_size, self.num_sensors, self.d_ob_emb)
+            extended_pe = pe.unsqueeze(2).repeat([1, 1, self.num_sensors, 1])
             output = torch.cat([extend_output, extended_pe], dim=-1)
-            output = output.view(-1, batch_size, self.d_inp*(self.d_ob+16))
+            output = output.view(-1, batch_size, self.num_sensors*(self.d_ob_emb+self.d_pe))
         else:
             output = torch.cat([output, pe], axis=2)
 
         step2 = True
         if step2 == True:
-            r_out = self.transformer_encoder(output, src_key_padding_mask=mask)
+            r_out = self.transformer_encoder(output, src_key_padding_mask=time_mask)
         elif step2 == False:
             r_out = output
 
@@ -179,17 +225,17 @@ class Raindrop(nn.Module):
         masked_agg = True
         if masked_agg == True:
             lengths2 = lengths.unsqueeze(1)
-            mask2 = mask.permute(1, 0).unsqueeze(2).long()
+            mask2 = time_mask.permute(1, 0).unsqueeze(2).long()
             if sensor_wise_mask:
-                output = torch.zeros([batch_size,self.d_inp, self.d_ob+16]).cuda()
-                extended_missing_mask = missing_mask.view(-1, batch_size, self.d_inp)
-                for se in range(self.d_inp):
-                    r_out = r_out.view(-1, batch_size, self.d_inp, (self.d_ob+16))
+                output = torch.zeros([batch_size,self.num_sensors, self.d_ob_emb+16]).cuda()
+                extended_missing_mask = sensor_mask.view(-1, batch_size, self.num_sensors)
+                for se in range(self.num_sensors):
+                    r_out = r_out.view(-1, batch_size, self.num_sensors, (self.d_ob_emb+16))
                     out = r_out[:, :, se, :]
                     len = torch.sum(extended_missing_mask[:, :, se], dim=0).unsqueeze(1)
                     out_sensor = torch.sum(out * (1 - extended_missing_mask[:, :, se].unsqueeze(-1)), dim=0) / (len + 1)
                     output[:, se, :] = out_sensor
-                output = output.view([-1, self.d_inp*(self.d_ob+16)])
+                output = output.view([-1, self.num_sensors*(self.d_ob_emb+16)])
             elif self.aggreg == 'mean':
                 output = torch.sum(r_out * (1 - mask2), dim=0) / (lengths2 + 1)
         elif masked_agg == False:

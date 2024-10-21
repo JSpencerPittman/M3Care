@@ -27,23 +27,6 @@ def one_hot(y_):
     n_values = np.max(y_) + 1
     return np.eye(n_values)[np.array(y_, dtype=np.int32)]
 
-def generate_global_structure(data, K=10):
-    # Generate a global structure using cosine similarity between feature vectors
-    observations = data[:, :, :36]
-    cos_sim = torch.zeros([observations.shape[0], 36, 36])
-    for row in tqdm(range(observations.shape[0])):
-        unit = observations[row].T
-        cos_sim_unit = cosine_similarity(unit)
-        cos_sim[row] = torch.from_numpy(cos_sim_unit)
-
-    # Calculate the average similarity and create a mask for the top-K similar features
-    ave_sim = torch.mean(cos_sim, dim=0)
-    index = torch.argsort(ave_sim, dim=0)
-    index_K = index < K
-    global_structure = index_K * ave_sim
-    global_structure = masked_softmax(global_structure)
-    return global_structure
-
 def diffuse(unit, N=10):
     # Apply diffusion operation to reduce the temporal dimension of the input
     n_time = unit.shape[-1]
@@ -161,8 +144,7 @@ def main():
             Ptest_time_tensor = Ptest_time_tensor.squeeze(2).permute(1, 0)
 
             # Initialize the model
-            model = Raindrop(d_inp, d_model, nhead, nhid, nlayers, dropout, max_len, d_static, MAX, 0.5, aggreg, n_classes, 
-                                global_structure=torch.ones(d_inp, d_inp))
+            model = Raindrop(d_inp, d_model, nhead, nhid, nlayers, dropout, max_len, d_static, MAX, 0.5, aggreg, n_classes)
             model = model.cuda()
 
             # Define loss function, optimizer, and learning rate scheduler
@@ -212,6 +194,7 @@ def main():
                                           ytrain_tensor[b_idxs].cuda()
 
                     lengths = torch.sum(Ptime > 0, dim=0)
+
                     outputs, _, _ = model(P, Pstatic, Ptime, lengths)
 
                     # Compute loss, backpropagate, and update model parameters
