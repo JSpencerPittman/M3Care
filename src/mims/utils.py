@@ -287,7 +287,7 @@ def evaluate(model, P_tensor, P_time_tensor, P_static_tensor, batch_size=100, n_
         if P_static_tensor is not None:
             Pstatic = P_static_tensor[start:start + batch_size]
         lengths = torch.sum(Ptime > 0, dim=0)
-        middleoutput, _, _ = model.forward(P, Pstatic, Ptime, lengths)
+        middleoutput = model.forward(P, Ptime, lengths, Pstatic)
         out[start:start + batch_size] = middleoutput.detach().cpu()
         start += batch_size
     if rem > 0:
@@ -296,7 +296,7 @@ def evaluate(model, P_tensor, P_time_tensor, P_static_tensor, batch_size=100, n_
         if P_static_tensor is not None:
             Pstatic = P_static_tensor[start:start + batch_size]
         lengths = torch.sum(Ptime > 0, dim=0)
-        whatever, _, _ = model.forward(P, Pstatic, Ptime, lengths)
+        whatever = model.forward(P, Ptime, lengths, Pstatic)
         out[start:start + rem] = whatever.detach().cpu()
     return out
 
@@ -310,5 +310,5 @@ def evaluate_standard(model, P_tensor, P_time_tensor, P_static_tensor, batch_siz
         P_static_tensor = P_static_tensor.cuda()
 
     lengths = torch.sum(P_time_tensor > 0, dim=0)
-    out, _, _ = model.forward(P_tensor, P_static_tensor, P_time_tensor, lengths)
+    out = model.forward(P_tensor, P_time_tensor, lengths, P_static_tensor)
     return out

@@ -144,7 +144,19 @@ def main():
             Ptest_time_tensor = Ptest_time_tensor.squeeze(2).permute(1, 0)
 
             # Initialize the model
-            model = Raindrop(d_inp, d_model, nhead, nhid, nlayers, dropout, max_len, d_static, MAX, 0.5, aggreg, n_classes)
+            model = Raindrop(num_sensors=d_inp,
+                             timesteps=max_len,
+                             num_classes=n_classes,
+                             d_ob=1,
+                             d_ob_emb=d_ob,
+                             d_pe=16,
+                             d_static=d_static,
+                             d_static_emb=d_model,
+                             use_static=True,
+                             num_tran_heads=nhead,
+                             num_tran_layers=nlayers,
+                             d_trans_hid=nhid,
+                             dropout=dropout)
             model = model.cuda()
 
             # Define loss function, optimizer, and learning rate scheduler
@@ -195,7 +207,7 @@ def main():
 
                     lengths = torch.sum(Ptime > 0, dim=0)
 
-                    outputs, _, _ = model(P, Pstatic, Ptime, lengths)
+                    outputs = model(P, Ptime, lengths, Pstatic)
 
                     # Compute loss, backpropagate, and update model parameters
                     optimizer.zero_grad()
