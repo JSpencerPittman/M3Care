@@ -24,9 +24,10 @@ class Raindrop(nn.Module):
                  d_static: int = 6,
                  d_static_emb: int = 128, 
                  use_static: bool = True,
+                 num_prop_layers: int = 2,
                  num_tran_heads: int = 4,
                  num_tran_layers: int = 2,
-                 d_trans_hid: int = 128,
+                 d_tran_hid: int = 128,
                  dropout: float = 0.3,
                  init_range: float = 1e-10):
         """
@@ -49,11 +50,13 @@ class Raindrop(nn.Module):
                 Defaults to 128.
             use_static (bool, optional): Is a static tensor being used?
                 Defaults to True.
+            num_prop_layers (int, optional): The number of layers observations are
+                propagated through. Defaults to 2.
             num_tran_heads (int, optional): Number of heads used in the transformer.
                 Defaults to 4.
             num_tran_layers (int, optional): Number of layers in the transformer.
                 Defaults to 2.
-            d_trans_hid (int, optional): Dimension of the feedforward layer in the
+            d_tran_hid (int, optional): Dimension of the feedforward layer in the
                 transformer. Defaults to 128.
             dropout (float, optional): Dropout to be used. Defaults to 0.3.
             init_range (float, optional): Range used for initializing weights. 
@@ -72,10 +75,12 @@ class Raindrop(nn.Module):
         self.d_static = d_static
         self.d_static_emb = d_static_emb
         self.use_static = use_static
+        # propagation
+        self.num_prop_layers = num_prop_layers
         # transformer
         self.num_tran_heads = num_tran_heads
         self.num_tran_layers = num_tran_layers
-        self.d_trans_hid = d_trans_hid
+        self.d_tran_hid = d_tran_hid
         # miscellaneous
         self.dropout = nn.Dropout(dropout)
 
@@ -94,21 +99,18 @@ class Raindrop(nn.Module):
         # second dimension required for glorot initialization
         self.R_u = nn.Parameter(torch.Tensor(1, self.num_sensors*self.d_ob_emb)).cuda()
 
-        # propagation of observation
-        self.ob_propagation =  ObservationProgation(
-                                 d_feat=timesteps*self.d_ob_emb,
+        # observation propagation layers
+        self.obs_prop = nn.ModuleList([
+            ObservationProgation(d_feat=timesteps * self.d_ob_emb,
                                  heads=1,
                                  num_nodes=num_sensors)
-
-        self.ob_propagation_layer2 = ObservationProgation(
-                                        d_feat=timesteps*self.d_ob_emb,
-                                        heads=1,
-                                        num_nodes=num_sensors)
+            for _ in range(num_prop_layers)
+        ])
 
         # calculation of r_out
         encoder_layers = nn.TransformerEncoderLayer(num_sensors * d_ob_emb + d_pe,
                                                     num_tran_heads, 
-                                                    d_trans_hid,
+                                                    d_tran_hid,
                                                     dropout)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers,
                                                          num_tran_layers)
@@ -196,33 +198,46 @@ class Raindrop(nn.Module):
         alpha_all = torch.zeros([edge_index.shape[1],  batch_size]).cuda()
 
         for smp_idx in range(batch_size):
+            # smp_h (T, Se*D_ob)
             smp_h = h[:, smp_idx, :]
 
+            # smp_h (Se, T, D_ob)
             smp_h = smp_h.reshape([timesteps,
                                    self.num_sensors,
                                    self.d_ob_emb]).permute(1, 0, 2)
+            # smp_h (Se, T * D_ob)
             smp_h = smp_h.reshape(self.num_sensors, timesteps*self.d_ob_emb)
 
-            smp_h, (edge_index_layer2, alpha_layer2) = self.ob_propagation(smp_h,
-                                                      edge_index=edge_index,
-                                                      edge_weights=edge_weights,
-                                                      edge_attr=None,
-                                                      ret_attn_weights=True)
-        
-            alpha_layer2 = alpha_layer2.squeeze(-1)
+            prop_edge_index, prop_edge_weights = edge_index, edge_weights
+            for lay_idx in range(self.num_prop_layers):
+                smp_h, (prop_edge_index, prop_edge_weights) = \
+                    self.obs_prop[lay_idx](smp_h,
+                                           edge_index=prop_edge_index,
+                                           edge_weights=prop_edge_weights,
+                                           edge_attr=None,
+                                           ret_attn_weights=True)
+                prop_edge_weights = prop_edge_weights.squeeze(-1)
 
-            smp_h, (_, alpha_final) = self.ob_propagation_layer2(smp_h,
-                                                             edge_index=edge_index_layer2,
-                                                             edge_weights=alpha_layer2,
-                                                             edge_attr=None,
-                                                             ret_attn_weights=True)
+            # smp_h, (edge_index_layer2, alpha_layer2) = self.ob_propagation(smp_h,
+            #                                           edge_index=edge_index,
+            #                                           edge_weights=edge_weights,
+            #                                           edge_attr=None,
+            #                                           ret_attn_weights=True)
+        
+            # alpha_layer2 = alpha_layer2.squeeze(-1)
+
+            # smp_h, (_, alpha_final) = self.ob_propagation_layer2(smp_h,
+            #                                                  edge_index=edge_index_layer2,
+            #                                                  edge_weights=alpha_layer2,
+            #                                                  edge_attr=None,
+            #                                                  ret_attn_weights=True)
 
             # Save propagated nodes and alphas
             smp_h = smp_h.view([self.num_sensors, timesteps, self.d_ob_emb])
             smp_h = smp_h.permute([1, 0, 2])
             smp_h = smp_h.reshape([-1, self.num_sensors*self.d_ob_emb])
             output[:, smp_idx, :] = smp_h
-            alpha_all[:, smp_idx] = alpha_final.squeeze(-1)
+            alpha_all[:, smp_idx] = prop_edge_weights
 
         output = torch.cat([output, pe], axis=2) # (T, B, Se * D_ob + D_pe)
 

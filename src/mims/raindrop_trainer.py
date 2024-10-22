@@ -153,9 +153,10 @@ def main():
                              d_static=d_static,
                              d_static_emb=d_model,
                              use_static=True,
+                             num_prop_layers=2,
                              num_tran_heads=nhead,
                              num_tran_layers=nlayers,
-                             d_trans_hid=nhid,
+                             d_tran_hid=nhid,
                              dropout=dropout)
             model = model.cuda()
 
