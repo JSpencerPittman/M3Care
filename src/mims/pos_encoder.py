@@ -1,29 +1,43 @@
-from torch import nn
+from torch import nn, Tensor
 import torch
-import numpy as np
 
 
 class PositionalEncodingTF(nn.Module):
-    def __init__(self, d_model, max_len=500, MAX=10000):
-        super(PositionalEncodingTF, self).__init__()
-        self.max_len = max_len
-        self.d_model = d_model
-        self.MAX = MAX
-        self._num_timescales = d_model // 2
+    """
+    Encodes timestamps according to method in the appendix A.1 of RAINDROP.
 
-    def getPE(self, P_time):
-        B = P_time.shape[1]
+    frequency(f) = 10^4
+    expected dimensions (eps)
+    p^t_{2k} = sin(t/f^(2k/eps))
+    p^t_{2k+1} = cos(t/f^(2k/eps))
+    """
 
-        timescales = self.max_len ** np.linspace(0, 1, self._num_timescales)
+    def __init__(self, pe_dim: int, max_timesteps: int = 500):
+        """
+        Constructor for RaindropPositionalEncoder.
 
-        times = torch.Tensor(P_time.cpu()).unsqueeze(2)
-        scaled_time = times / torch.Tensor(timescales[None, None, :])
-        pe = torch.cat([torch.sin(scaled_time), torch.cos(scaled_time)], axis=-1)  # T x B x d_model
-        pe = pe.type(torch.FloatTensor)
+        Args:
+            pe_dim (int): The dimensions of the model or the embedding dimension.
+            max_timesteps (int, optional): The max number of timesteps. Defaults to 500.
+        """
 
-        return pe
+        super().__init__()
+        self.pe_dim = pe_dim
+        self.max_timesteps = max_timesteps
 
-    def forward(self, P_time):
-        pe = self.getPE(P_time)
-        pe = pe.cuda()
-        return pe
+        self.timescales = max_timesteps ** torch.linspace(0, 1, self.pe_dim//2).cuda()
+
+    def forward(self, times: Tensor) -> Tensor:
+        """
+        Encodes the provided timestamps
+
+        Args:
+            times (Tensor): timestamps where each timestamp is a continuous
+                value (T, B).
+
+        Returns:
+            Tensor: Encoded timestamps (T, B).
+        """
+
+        scaled_times = times.unsqueeze(-1) / self.timescales[None, None, :]
+        return torch.concat([torch.sin(scaled_times), torch.cos(scaled_times)], dim=-1)
