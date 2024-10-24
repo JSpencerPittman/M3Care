@@ -19,7 +19,6 @@ class ObservationProgation(MessagePassing):
 
     def __init__(self,
                  d_feat: int,
-                 num_nodes: int,
                  heads: int = 1,
                  concat: bool = True,
                  dropout: float = 0.,
@@ -28,7 +27,6 @@ class ObservationProgation(MessagePassing):
         super().__init__(node_dim=0, **kwargs)
 
         self.d_feat = d_feat
-        self.num_nodes = num_nodes
         self.heads = heads
         self.concat = concat
         self.dropout = dropout
@@ -47,7 +45,9 @@ class ObservationProgation(MessagePassing):
                 throughout the graph. Shape of (N, F).
         """
 
-        assert x.shape[0] == self.num_nodes
+        # assert x.shape[0] == self.num_nodes
+        self.num_nodes = x.shape[0]
+        # ObservationProgation._safety_check(x, edge_index)
 
         # Propagate x
         out = self.propagate(edge_index,
@@ -89,7 +89,7 @@ class ObservationProgation(MessagePassing):
         self._alpha_store = alpha # use-beta == False
 
         # Emphasize the strongest edges and randomly cut (p*E) edges
-        alpha = softmax(alpha, index=edge_index_i, num_nodes=self.num_nodes)
+        alpha = softmax(alpha, index=edge_index_i)
         alpha = F.dropout(alpha, p=self.dropout, training=self.training)
 
         # Project the source nodes to multiple heads

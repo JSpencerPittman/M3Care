@@ -102,8 +102,7 @@ class Raindrop(nn.Module):
         # observation propagation layers
         self.obs_prop = nn.ModuleList([
             ObservationProgation(d_feat=timesteps * self.d_ob_emb,
-                                 heads=1,
-                                 num_nodes=num_sensors)
+                                 heads=1)
             for _ in range(num_prop_layers)
         ])
 
@@ -188,57 +187,30 @@ class Raindrop(nn.Module):
         # Initalize edges
         adj = self.adj
         adj[torch.eye(self.num_sensors).byte()] = 1
-        edge_index = torch.nonzero(adj).T
-        edge_weights = adj[edge_index[0], edge_index[1]]
+        # edge_index = torch.nonzero(adj).T
+        # edge_weights = adj[edge_index[0], edge_index[1]]
+
+        # Diagonalize samples
+        h_diag, edge_index, edge_weights = self.diagonalize_adj_graphs(h, adj)
 
         # Initalize output (T, B, Se * D_ob_emb)
         output = torch.zeros([timesteps, batch_size, self.num_sensors*self.d_ob_emb]).cuda()
 
-        # Initialize attention weights (E, B)
-        alpha_all = torch.zeros([edge_index.shape[1],  batch_size]).cuda()
+        prop_edge_index, prop_edge_weights = edge_index, edge_weights
+        for lay_idx in range(self.num_prop_layers):
+            h_diag, (prop_edge_index, prop_edge_weights) = \
+                self.obs_prop[lay_idx](h_diag,
+                                        edge_index=prop_edge_index,
+                                        edge_weights=prop_edge_weights,
+                                        edge_attr=None,
+                                        ret_attn_weights=True)
+            prop_edge_weights = prop_edge_weights.squeeze(-1)
 
-        for smp_idx in range(batch_size):
-            # smp_h (T, Se*D_ob)
-            smp_h = h[:, smp_idx, :]
-
-            # smp_h (Se, T, D_ob)
-            smp_h = smp_h.reshape([timesteps,
-                                   self.num_sensors,
-                                   self.d_ob_emb]).permute(1, 0, 2)
-            # smp_h (Se, T * D_ob)
-            smp_h = smp_h.reshape(self.num_sensors, timesteps*self.d_ob_emb)
-
-            prop_edge_index, prop_edge_weights = edge_index, edge_weights
-            for lay_idx in range(self.num_prop_layers):
-                smp_h, (prop_edge_index, prop_edge_weights) = \
-                    self.obs_prop[lay_idx](smp_h,
-                                           edge_index=prop_edge_index,
-                                           edge_weights=prop_edge_weights,
-                                           edge_attr=None,
-                                           ret_attn_weights=True)
-                prop_edge_weights = prop_edge_weights.squeeze(-1)
-
-            # smp_h, (edge_index_layer2, alpha_layer2) = self.ob_propagation(smp_h,
-            #                                           edge_index=edge_index,
-            #                                           edge_weights=edge_weights,
-            #                                           edge_attr=None,
-            #                                           ret_attn_weights=True)
+        # Save propagated nodes
+        output = h_diag.reshape(batch_size, self.num_sensors, self.timesteps, self.d_ob_emb)
+        output = output.permute(2, 0, 1, 3)
+        output = output.reshape(self.timesteps, batch_size, self.num_sensors*self.d_ob_emb)
         
-            # alpha_layer2 = alpha_layer2.squeeze(-1)
-
-            # smp_h, (_, alpha_final) = self.ob_propagation_layer2(smp_h,
-            #                                                  edge_index=edge_index_layer2,
-            #                                                  edge_weights=alpha_layer2,
-            #                                                  edge_attr=None,
-            #                                                  ret_attn_weights=True)
-
-            # Save propagated nodes and alphas
-            smp_h = smp_h.view([self.num_sensors, timesteps, self.d_ob_emb])
-            smp_h = smp_h.permute([1, 0, 2])
-            smp_h = smp_h.reshape([-1, self.num_sensors*self.d_ob_emb])
-            output[:, smp_idx, :] = smp_h
-            alpha_all[:, smp_idx] = prop_edge_weights
-
         output = torch.cat([output, pe], axis=2) # (T, B, Se * D_ob + D_pe)
 
         r_out = self.transformer_encoder(output, src_key_padding_mask=time_mask)
@@ -252,6 +224,44 @@ class Raindrop(nn.Module):
         output = self.mlp(output)
 
         return output
+    
+    def diagonalize_adj_graphs(self, x: Tensor, adj: Tensor
+                               ) -> tuple[Tensor, Tensor, Tensor]:
+        """
+        Convert the representation of multiple separate fully connected graphs
+        (B, N, F) to a single graph (B*N, F) where the previous individual graphs are
+        still kept disjoint. This allows MessagePassing to process multiple graphs
+        simultaneously.
+
+        Args:
+            x (Tensor): A collection of separate graphs (T, B, Se*D_ob).
+            adj (Tensor): Adjacency matrix shared by all graphs (Se, Se).
+
+        Returns:
+            tuple[Tensor, Tensor, Tensor]: The combined graph (B*Se, T*D_ob),
+                reassigned edge indices (2, B*Se*Se) , the edge weights (B*Se*Se).
+        """
+
+        batch_size = x.shape[1]
+
+        x = x.reshape(self.timesteps,
+                      batch_size,
+                      self.num_sensors,
+                      self.d_ob_emb)
+        x = x.permute(1, 2, 0, 3)
+        x = x.reshape(batch_size*self.num_sensors, self.timesteps * self.d_ob_emb)
+        
+        edge_indices = torch.nonzero(adj)
+        num_edges = edge_indices.shape[0]
+
+        edge_indices = edge_indices.repeat(batch_size, 1).T  
+        edge_weights = adj[edge_indices[0], edge_indices[1]]
+        
+        graph_start_idx = (torch.arange(batch_size) * self.num_sensors).cuda()
+        graph_start_idx = graph_start_idx.repeat_interleave(num_edges)
+        edge_indices = edge_indices + graph_start_idx.unsqueeze(0)
+
+        return x, edge_indices, edge_weights
     
     def _verify_inputs(self,
                        src: Tensor,
